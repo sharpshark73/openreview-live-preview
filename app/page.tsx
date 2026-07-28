@@ -25,6 +25,12 @@ import {
 const STORAGE_KEY = "openreview-live-renderer:draft:v1";
 const SYNC_MODE_KEY = "openreview-live-renderer:sync-mode:v1";
 const LANGUAGE_KEY = "openreview-live-preview:language:v1";
+const NOTICE_KEY = "openreview-live-preview:notice:v1";
+const SOURCE_URL = (
+  process.env.NEXT_PUBLIC_SOURCE_URL?.trim() ||
+  "https://github.com/sharpshark73/openreview-live-preview"
+).replace(/\/$/, "");
+const LICENSE_URL = `${SOURCE_URL}/blob/main/LICENSE.md`;
 
 const DEFAULT_TEXT = "";
 
@@ -76,6 +82,19 @@ const UI_TEXT = {
     previewFindTitle: "查找（Ctrl/⌘+F）",
     mathJaxError: "MathJax 错误",
     switchLanguage: "Switch to English",
+    notice: "声明",
+    source: "源码",
+    license: "许可证",
+    noticeTitle: "使用声明",
+    noticeIntro:
+      "OpenReview Live Preview 是独立、非官方工具，与 OpenReview 不存在隶属、授权或背书关系。",
+    noticePrivacy:
+      "草稿仅保存在当前浏览器的本地存储中，不会发送给 OpenReview 或本工具的服务器。",
+    noticeCompatibility:
+      "本工具以兼容 OpenReview 渲染为目标；OpenReview 更新后仍可能出现差异，请在正式提交前复核最终预览。",
+    noticeLicense:
+      "本工具以 GNU AGPL v3 或更高版本发布，并保留 OpenReview 及其他第三方项目的版权声明。",
+    acceptNotice: "我已了解",
   },
   en: {
     published: "Published",
@@ -120,6 +139,19 @@ const UI_TEXT = {
     previewFindTitle: "Find (Ctrl/⌘+F)",
     mathJaxError: "MathJax error",
     switchLanguage: "切换到中文",
+    notice: "Notice",
+    source: "Source",
+    license: "License",
+    noticeTitle: "Before you continue",
+    noticeIntro:
+      "OpenReview Live Preview is an independent, unofficial tool. It is not affiliated with, authorized by, or endorsed by OpenReview.",
+    noticePrivacy:
+      "Drafts are stored only in this browser's local storage and are not sent to OpenReview or this tool's server.",
+    noticeCompatibility:
+      "This tool aims to match OpenReview rendering, but differences may appear after OpenReview updates. Verify the final preview before submitting.",
+    noticeLicense:
+      "This tool is released under GNU AGPL v3 or later and preserves the notices of OpenReview and other third-party projects.",
+    acceptNotice: "I understand",
   },
 } satisfies Record<Language, Record<string, unknown>>;
 
@@ -395,6 +427,7 @@ export default function Home() {
   const [syncMode, setSyncMode] = useState<SyncMode>("click");
   const [canUndoLint, setCanUndoLint] = useState(false);
   const [language, setLanguage] = useState<Language>("zh");
+  const [noticeOpen, setNoticeOpen] = useState(false);
   const ui = UI_TEXT[language];
 
   const sourceEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -449,6 +482,7 @@ export default function Home() {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     const storedSyncMode = window.localStorage.getItem(SYNC_MODE_KEY);
     const storedLanguage = window.localStorage.getItem(LANGUAGE_KEY);
+    const noticeAccepted = window.localStorage.getItem(NOTICE_KEY) === "accepted";
     queueMicrotask(() => {
       const isOldStarterExample =
         stored?.startsWith("## Summary\n\nThis is an **OpenReview-compatible**") &&
@@ -464,6 +498,7 @@ export default function Home() {
       if (storedLanguage === "zh" || storedLanguage === "en") {
         setLanguage(storedLanguage);
       }
+      setNoticeOpen(!noticeAccepted);
       setDraftLoaded(true);
       setSanitizationReady(true);
     });
@@ -1299,6 +1334,11 @@ export default function Home() {
     }
   };
 
+  const acceptNotice = () => {
+    window.localStorage.setItem(NOTICE_KEY, "accepted");
+    setNoticeOpen(false);
+  };
+
   return (
     <div className="appShell">
       <header className="topbar">
@@ -1382,6 +1422,17 @@ export default function Home() {
             </button>
             <button className="primaryAction" type="button" onClick={handleCopy}>
               {copied ? ui.copied : ui.copy}
+            </button>
+            <a
+              className="legalLink"
+              href={SOURCE_URL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {ui.source}
+            </a>
+            <button type="button" onClick={() => setNoticeOpen(true)}>
+              {ui.notice}
             </button>
             <button
               className="languageSwitch"
@@ -1641,6 +1692,38 @@ export default function Home() {
         role="tooltip"
         hidden
       />
+      {noticeOpen ? (
+        <div className="noticeBackdrop">
+          <section
+            className="noticeDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notice-title"
+          >
+            <div className="noticeEyebrow">OpenReview Live Preview</div>
+            <h2 id="notice-title">{ui.noticeTitle}</h2>
+            <p>{ui.noticeIntro}</p>
+            <ul>
+              <li>{ui.noticePrivacy}</li>
+              <li>{ui.noticeCompatibility}</li>
+              <li>{ui.noticeLicense}</li>
+            </ul>
+            <div className="noticeActions">
+              <div className="noticeLinks">
+                <a href={SOURCE_URL} target="_blank" rel="noreferrer">
+                  {ui.source}
+                </a>
+                <a href={LICENSE_URL} target="_blank" rel="noreferrer">
+                  {ui.license}
+                </a>
+              </div>
+              <button type="button" autoFocus onClick={acceptNotice}>
+                {ui.acceptNotice}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

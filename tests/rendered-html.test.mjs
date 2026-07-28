@@ -89,6 +89,26 @@ test("uses the OpenReview package versions and official Markdown linter", async 
   assert.equal(JSON.parse(markdownlintPackage).version, "0.40.0");
 });
 
+test("ships the AGPL license and first-visit unofficial notice", async () => {
+  const [license, packageJson, pageSource, notices] = await Promise.all([
+    readFile(new URL("../LICENSE.md", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../THIRD_PARTY_NOTICES.md", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(license, /GNU AFFERO GENERAL PUBLIC LICENSE/);
+  assert.match(license, /Version 3, 19 November 2007/);
+  assert.equal(JSON.parse(packageJson).license, "AGPL-3.0-or-later");
+  assert.match(pageSource, /openreview-live-preview:notice:v1/);
+  assert.match(pageSource, /independent, unofficial tool/);
+  assert.match(pageSource, /NEXT_PUBLIC_SOURCE_URL/);
+  assert.match(
+    notices,
+    /not\s+affiliated with, authorized by, or endorsed by OpenReview/,
+  );
+});
+
 test("escapes valid and invalid raw HTML like OpenReview", () => {
   assert.equal(
     parseOpenReviewMarkdown("<div>some test text</div>"),

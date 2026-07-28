@@ -2,6 +2,15 @@
   "name": "openreview-live-preview",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://github.com/sharpshark73/openreview-live-preview#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sharpshark73/openreview-live-preview.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sharpshark73/openreview-live-preview/issues"
+  },
   "engines": {
     "node": ">=22.13.0"
   },

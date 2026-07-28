@@ -7,7 +7,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "OpenReview Live Preview",
   description:
-    "A private, local-first live preview compatible with OpenReview Markdown and TeX.",
+    "An independent, unofficial live preview compatible with OpenReview Markdown and TeX.",
 };
 
 export default function RootLayout({

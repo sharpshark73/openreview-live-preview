@@ -120,7 +120,11 @@ a:focus {
 }
 
 .topbar button,
-.topbar select {
+.topbar select,
+.topbar .legalLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 32px;
   padding: 5px 10px;
   color: #4d5b61;
@@ -128,6 +132,8 @@ a:focus {
   border: 1px solid #c7c4be;
   font-size: 0.73rem;
   font-weight: 700;
+  line-height: 1.2;
+  text-decoration: none;
 }
 
 .controlGroup button + button {
@@ -136,12 +142,105 @@ a:focus {
 
 .topbar button:hover,
 .topbar button:focus-visible,
+.topbar .legalLink:hover,
+.topbar .legalLink:focus-visible,
 .topbar button.active {
   position: relative;
   color: #fff;
   background: var(--or-blue-dark);
   border-color: var(--or-blue-dark);
   outline: 0;
+}
+
+.noticeBackdrop {
+  position: fixed;
+  z-index: 300;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(25, 29, 32, 0.58);
+  backdrop-filter: blur(2px);
+}
+
+.noticeDialog {
+  width: min(520px, 100%);
+  padding: 26px 28px 24px;
+  color: #30383e;
+  background: #fffdfa;
+  border: 1px solid #c9c5bd;
+  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.28);
+}
+
+.noticeEyebrow {
+  margin-bottom: 7px;
+  color: var(--or-red);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.noticeDialog h2 {
+  margin: 0 0 14px;
+  color: var(--or-ink);
+  font-size: 1.25rem;
+}
+
+.noticeDialog p,
+.noticeDialog li {
+  line-height: 1.65;
+}
+
+.noticeDialog p {
+  margin: 0 0 12px;
+}
+
+.noticeDialog ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.noticeDialog li + li {
+  margin-top: 6px;
+}
+
+.noticeActions,
+.noticeLinks {
+  display: flex;
+  align-items: center;
+}
+
+.noticeActions {
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.noticeLinks {
+  gap: 14px;
+}
+
+.noticeLinks a {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.noticeActions button {
+  min-width: 96px;
+  min-height: 36px;
+  padding: 7px 15px;
+  color: #fff;
+  background: var(--or-red);
+  border: 1px solid var(--or-red-dark);
+  font-weight: 700;
+}
+
+.noticeActions button:hover,
+.noticeActions button:focus-visible {
+  background: var(--or-red-dark);
+  outline: 2px solid rgba(140, 27, 19, 0.24);
+  outline-offset: 2px;
 }
 
 .toolbarActions {
@@ -784,6 +883,14 @@ a:focus {
 
   .toolbarActions button {
     flex: 1;
+  }
+
+  .toolbarActions .legalLink {
+    flex: 1;
+  }
+
+  .noticeDialog {
+    padding: 22px 20px 20px;
   }
 
   .warningPanel {

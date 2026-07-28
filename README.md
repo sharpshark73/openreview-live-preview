@@ -18,6 +18,13 @@ Draft text stays in the browser's `localStorage`. The app has no backend and
 does not send drafts to OpenReview or another application service. MathJax is
 loaded from the same jsDelivr URL used by OpenReview.
 
+This is an independent, unofficial tool. It is not affiliated with, authorized
+by, or endorsed by OpenReview.
+
+[Source code](https://github.com/sharpshark73/openreview-live-preview) ·
+[License](./LICENSE.md) ·
+[Third-party notices](./THIRD_PARTY_NOTICES.md)
+
 ## Run locally
 
 Requires Node.js 22.13 or newer.
@@ -69,3 +76,9 @@ The renderer currently tracks OpenReview web v1.15.25, commit
 `553a5a65fe7ba269aeaa5c56c06a6b84356d03f4` from 2026-07-21. See
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for source and license
 details.
+
+The complete project is distributed under
+[GNU AGPL v3 or later](./LICENSE.md). Anyone deploying a modified version over
+a network must keep the in-app source link available. Forks and alternate
+deployments should set `NEXT_PUBLIC_SOURCE_URL` to a public repository
+containing the exact corresponding source for their deployed version.
