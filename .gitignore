@@ -1,0 +1,29 @@
+# Dependencies
+/node_modules
+
+# Build and test output
+/coverage
+/.next/
+/.vinext/
+/dist/
+/out/
+/outputs/
+/work/
+/.wrangler/
+
+# Local configuration and caches
+.env*
+!.env.example
+.eslintcache
+*.tsbuildinfo
+.idea/
+.vscode/
+
+# OS and logs
+.DS_Store
+*.pem
+*.log
+
+# Framework-generated files
+next-env.d.ts
+.vercel/

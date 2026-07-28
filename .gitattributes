@@ -1,0 +1,4 @@
+* text=auto eol=lf
+
+# This browser bundle is generated from the pinned markdownlint dependency.
+lib/vendor/markdownlint-browser.mjs linguist-generated=true
