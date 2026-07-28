@@ -93,7 +93,7 @@ test("ships the AGPL license and first-visit unofficial notice", async () => {
   const [license, packageJson, pageSource, notices] = await Promise.all([
     readFile(new URL("../LICENSE.md", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/editor.tsx", import.meta.url), "utf8"),
     readFile(new URL("../THIRD_PARTY_NOTICES.md", import.meta.url), "utf8"),
   ]);
 

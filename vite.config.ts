@@ -21,6 +21,10 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    base:
+      process.env.GITHUB_PAGES === "true"
+        ? "/openreview-live-preview/"
+        : undefined,
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

@@ -41,6 +41,7 @@ Open <http://localhost:3000>.
 ```bash
 npm run dev      # Start the local development server
 npm run build    # Create a production build
+npm run build:static # Export a static site to dist/client
 npm run start    # Serve the production build
 npm run lint     # Run static checks
 npm test         # Build and run compatibility tests
@@ -52,6 +53,19 @@ npm test         # Build and run compatibility tests
 npm run build
 npm run start
 ```
+
+## Static hosting
+
+For Cloudflare Pages, use:
+
+- Build command: `npm run build:static`
+- Build output directory: `dist/client`
+- Node.js version: `22.13.0`
+
+Pushes to `main` are also deployed automatically to
+[GitHub Pages](https://sharpshark73.github.io/openreview-live-preview/) by the
+included Pages workflow. Its separate `npm run build:pages` command applies the
+repository subpath required by GitHub Pages.
 
 ## Docker
 
