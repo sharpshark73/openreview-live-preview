@@ -89,6 +89,21 @@ test("uses the OpenReview package versions and official Markdown linter", async 
   assert.equal(JSON.parse(markdownlintPackage).version, "0.40.0");
 });
 
+test("shows MathJax's parsed input alongside formula errors", async () => {
+  const [editorSource, styles] = await Promise.all([
+    readFile(new URL("../app/editor.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(editorSource, /getMathItemsWithin/);
+  assert.match(editorSource, /item\.math/);
+  assert.match(editorSource, /openreviewMathSource/);
+  assert.match(editorSource, /MathJax 读取到的公式/);
+  assert.match(editorSource, /MathJax input/);
+  assert.match(styles, /\.mathErrorTooltipFormula/);
+  assert.match(styles, /user-select:\s*text/);
+});
+
 test("ships the AGPL license and first-visit unofficial notice", async () => {
   const [license, packageJson, pageSource, notices] = await Promise.all([
     readFile(new URL("../LICENSE.md", import.meta.url), "utf8"),

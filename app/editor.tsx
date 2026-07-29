@@ -81,6 +81,8 @@ const UI_TEXT = {
     sourceFindTitle: "查找与替换（Ctrl/⌘+F）",
     previewFindTitle: "查找（Ctrl/⌘+F）",
     mathJaxError: "MathJax 错误",
+    mathJaxInput: "MathJax 读取到的公式",
+    mathJaxMessage: "错误信息",
     switchLanguage: "Switch to English",
     notice: "声明",
     source: "源码",
@@ -138,6 +140,8 @@ const UI_TEXT = {
     sourceFindTitle: "Find and replace (Ctrl/⌘+F)",
     previewFindTitle: "Find (Ctrl/⌘+F)",
     mathJaxError: "MathJax error",
+    mathJaxInput: "MathJax input",
+    mathJaxMessage: "Error message",
     switchLanguage: "切换到中文",
     notice: "Notice",
     source: "Source",
@@ -185,15 +189,25 @@ type HighlightRegistryLike = {
 
 type HighlightConstructorLike = new (...ranges: Range[]) => unknown;
 
+type MathJaxMathItemLike = {
+  math?: string;
+  typesetRoot?: Element | null;
+};
+
+type MathJaxDocumentLike = {
+  getMathItemsWithin?: (
+    elements: Element | Element[],
+  ) => MathJaxMathItemLike[];
+  safe?: {
+    filterAttributes: Map<string, string>;
+    filterMethods: Record<string, unknown>;
+  };
+};
+
 type MathJaxLike = {
   startup?: {
     defaultReady?: () => void;
-    document?: {
-      safe?: {
-        filterAttributes: Map<string, string>;
-        filterMethods: Record<string, unknown>;
-      };
-    };
+    document?: MathJaxDocumentLike;
     promise?: Promise<unknown>;
   };
   typesetPromise?: (elements?: Element[]) => Promise<unknown>;
@@ -396,7 +410,17 @@ function getHighlightApi() {
 function annotateMathJaxErrors(
   container: HTMLElement,
   language: Language,
+  mathDocument?: MathJaxDocumentLike,
 ) {
+  const formulaByTypesetRoot = new Map<Element, string>();
+  const mathItems = mathDocument?.getMathItemsWithin?.(container) ?? [];
+
+  for (const item of mathItems) {
+    if (item.typesetRoot && typeof item.math === "string") {
+      formulaByTypesetRoot.set(item.typesetRoot, item.math);
+    }
+  }
+
   const errors = container.querySelectorAll<HTMLElement>("mjx-merror");
 
   for (const error of errors) {
@@ -406,12 +430,27 @@ function annotateMathJaxErrors(
       error.textContent?.trim();
     if (!message) continue;
 
+    const typesetRoot = error.closest("mjx-container");
+    const formula = typesetRoot
+      ? formulaByTypesetRoot.get(typesetRoot)
+      : undefined;
+
     error.dataset.openreviewMathError = message;
+    if (formula !== undefined) {
+      error.dataset.openreviewMathSource = formula;
+    }
     error.classList.add("mathJaxError");
     error.tabIndex = 0;
     error.setAttribute(
       "aria-label",
-      `${UI_TEXT[language].mathJaxError}: ${message}`,
+      [
+        `${UI_TEXT[language].mathJaxError}: ${message}`,
+        formula === undefined
+          ? null
+          : `${UI_TEXT[language].mathJaxInput}: ${formula}`,
+      ]
+        .filter(Boolean)
+        .join(". "),
     );
   }
 }
@@ -437,6 +476,7 @@ export default function Editor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const copyTimerRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
+  const mathErrorHideTimerRef = useRef<number | null>(null);
   const sourceHighlightRef = useRef<HTMLDivElement>(null);
   const sourceHighlightTimerRef = useRef<number | null>(null);
   const sourceScrollFrameRef = useRef<number | null>(null);
@@ -556,7 +596,11 @@ export default function Editor() {
       .then(() => mathJax.typesetPromise?.([container]))
       .then(() => {
         if (!cancelled && container.isConnected) {
-          annotateMathJaxErrors(container, language);
+          annotateMathJaxErrors(
+            container,
+            language,
+            mathJax.startup?.document,
+          );
           previewSearchRefreshRef.current?.();
         }
       })
@@ -641,6 +685,9 @@ export default function Editor() {
       if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
       if (highlightTimerRef.current) {
         window.clearTimeout(highlightTimerRef.current);
+      }
+      if (mathErrorHideTimerRef.current) {
+        window.clearTimeout(mathErrorHideTimerRef.current);
       }
       if (sourceHighlightTimerRef.current) {
         window.clearTimeout(sourceHighlightTimerRef.current);
@@ -1289,10 +1336,28 @@ export default function Editor() {
       : null;
 
   const hideMathErrorTooltip = () => {
+    if (mathErrorHideTimerRef.current !== null) {
+      window.clearTimeout(mathErrorHideTimerRef.current);
+      mathErrorHideTimerRef.current = null;
+    }
     mathErrorTargetRef.current = null;
     if (mathErrorTooltipRef.current) {
       mathErrorTooltipRef.current.hidden = true;
     }
+  };
+
+  const scheduleMathErrorTooltipHide = () => {
+    if (mathErrorHideTimerRef.current !== null) return;
+    mathErrorHideTimerRef.current = window.setTimeout(() => {
+      mathErrorHideTimerRef.current = null;
+      hideMathErrorTooltip();
+    }, 140);
+  };
+
+  const cancelMathErrorTooltipHide = () => {
+    if (mathErrorHideTimerRef.current === null) return;
+    window.clearTimeout(mathErrorHideTimerRef.current);
+    mathErrorHideTimerRef.current = null;
   };
 
   const showMathErrorTooltip = (target: EventTarget | null) => {
@@ -1303,25 +1368,67 @@ export default function Editor() {
       return;
     }
 
+    cancelMathErrorTooltipHide();
     const rect = error.getBoundingClientRect();
-    const placement =
-      rect.bottom + 118 > window.innerHeight && rect.top > 118
-        ? "above"
-        : "below";
     const tooltip = mathErrorTooltipRef.current;
     if (!tooltip) return;
 
     mathErrorTargetRef.current = error;
-    tooltip.textContent = message;
-    tooltip.className = `mathErrorTooltip ${placement}`;
-    tooltip.style.left = `${Math.min(
-      Math.max(12, rect.left),
-      Math.max(12, window.innerWidth - 392),
-    )}px`;
-    tooltip.style.top = `${
-      placement === "above" ? rect.top - 8 : rect.bottom + 8
-    }px`;
+    const formula = error.dataset.openreviewMathSource;
+    const header = document.createElement("div");
+    header.className = "mathErrorTooltipHeader";
+    header.textContent = ui.mathJaxError;
+
+    const content = document.createElement("div");
+    content.className = "mathErrorTooltipContent";
+
+    if (formula !== undefined) {
+      const formulaSection = document.createElement("section");
+      const formulaLabel = document.createElement("div");
+      const formulaCode = document.createElement("code");
+      formulaSection.className = "mathErrorTooltipSection";
+      formulaLabel.className = "mathErrorTooltipLabel";
+      formulaLabel.textContent = ui.mathJaxInput;
+      formulaCode.className = "mathErrorTooltipFormula";
+      formulaCode.textContent = formula;
+      formulaSection.append(formulaLabel, formulaCode);
+      content.append(formulaSection);
+    }
+
+    const messageSection = document.createElement("section");
+    const messageLabel = document.createElement("div");
+    const messageText = document.createElement("div");
+    messageSection.className = "mathErrorTooltipSection";
+    messageLabel.className = "mathErrorTooltipLabel";
+    messageLabel.textContent = ui.mathJaxMessage;
+    messageText.className = "mathErrorTooltipMessage";
+    messageText.textContent = message;
+    messageSection.append(messageLabel, messageText);
+    content.append(messageSection);
+
+    tooltip.replaceChildren(header, content);
+    tooltip.className = "mathErrorTooltip";
+    tooltip.style.left = "12px";
+    tooltip.style.top = "12px";
     tooltip.hidden = false;
+
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const placeAbove =
+      tooltipRect.height > spaceBelow && rect.top > spaceBelow;
+    const left = Math.min(
+      Math.max(12, rect.left),
+      Math.max(12, window.innerWidth - tooltipRect.width - 12),
+    );
+    const top = placeAbove
+      ? Math.max(12, rect.top - tooltipRect.height - 10)
+      : Math.min(
+          Math.max(12, rect.bottom + 10),
+          Math.max(12, window.innerHeight - tooltipRect.height - 12),
+        );
+    tooltip.classList.toggle("above", placeAbove);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
   };
 
   const handleMathErrorPointerMove = (target: EventTarget | null) => {
@@ -1330,7 +1437,7 @@ export default function Editor() {
     if (error) {
       showMathErrorTooltip(error);
     } else {
-      hideMathErrorTooltip();
+      scheduleMathErrorTooltipHide();
     }
   };
 
@@ -1651,9 +1758,9 @@ export default function Editor() {
               onPointerMove={(event) =>
                 handleMathErrorPointerMove(event.target)
               }
-              onPointerLeave={hideMathErrorTooltip}
+              onPointerLeave={scheduleMathErrorTooltipHide}
               onFocus={(event) => showMathErrorTooltip(event.target)}
-              onBlur={hideMathErrorTooltip}
+              onBlur={scheduleMathErrorTooltipHide}
             >
               <div
                 className={`openreviewFrame ${
@@ -1690,6 +1797,8 @@ export default function Editor() {
         ref={mathErrorTooltipRef}
         className="mathErrorTooltip below"
         role="tooltip"
+        onPointerEnter={cancelMathErrorTooltipHide}
+        onPointerLeave={hideMathErrorTooltip}
         hidden
       />
       {noticeOpen ? (
