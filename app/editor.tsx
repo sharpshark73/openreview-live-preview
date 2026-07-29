@@ -71,6 +71,7 @@ const UI_TEXT = {
     resetConfirm: "清空当前草稿？",
     edit: "编辑",
     preview: "预览",
+    debug: "Debug",
     previewStage: "预览阶段",
     finalPreview: "最终",
     markdownPreview: "Markdown",
@@ -134,6 +135,7 @@ const UI_TEXT = {
     resetConfirm: "Clear the current draft?",
     edit: "Editor",
     preview: "Preview",
+    debug: "Debug",
     previewStage: "Preview stage",
     finalPreview: "Final",
     markdownPreview: "Markdown",
@@ -641,6 +643,7 @@ export default function Editor() {
   const [language, setLanguage] = useState<Language>("zh");
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [debugMenuOpen, setDebugMenuOpen] = useState(false);
   const ui = UI_TEXT[language];
 
   const sourceEditorRef = useRef<SourceEditorHandle>(null);
@@ -651,6 +654,8 @@ export default function Editor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const moreMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const debugMenuRef = useRef<HTMLDivElement>(null);
+  const debugMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const copyTimerRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
   const mathErrorHideTimerRef = useRef<number | null>(null);
@@ -753,21 +758,33 @@ export default function Editor() {
   }, [language]);
 
   useEffect(() => {
-    if (!moreMenuOpen) return;
+    if (!moreMenuOpen && !debugMenuOpen) return;
 
     const handlePointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
       if (
-        event.target instanceof Node &&
+        moreMenuOpen &&
         !moreMenuRef.current?.contains(event.target)
       ) {
         setMoreMenuOpen(false);
+      }
+      if (
+        debugMenuOpen &&
+        !debugMenuRef.current?.contains(event.target)
+      ) {
+        setDebugMenuOpen(false);
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      setMoreMenuOpen(false);
-      moreMenuTriggerRef.current?.focus();
+      if (debugMenuOpen) {
+        setDebugMenuOpen(false);
+        debugMenuTriggerRef.current?.focus();
+      } else {
+        setMoreMenuOpen(false);
+        moreMenuTriggerRef.current?.focus();
+      }
     };
 
     window.addEventListener("pointerdown", handlePointerDown);
@@ -776,7 +793,7 @@ export default function Editor() {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [moreMenuOpen]);
+  }, [debugMenuOpen, moreMenuOpen]);
 
   useEffect(() => configureAndLoadMathJax(setMathJaxState), []);
 
@@ -2038,25 +2055,91 @@ export default function Editor() {
               <div className="paneTitleGroup">
                 <strong>{ui.preview}</strong>
                 <div
-                  className="previewStageSwitch"
-                  aria-label={ui.previewStage}
+                  ref={debugMenuRef}
+                  className="previewDebugMenu"
                 >
                   <button
-                    className={previewStage === "final" ? "active" : ""}
+                    ref={debugMenuTriggerRef}
+                    className={`previewDebugTrigger ${
+                      previewStage === "markdown" ? "active" : ""
+                    }`}
                     type="button"
-                    aria-pressed={previewStage === "final"}
-                    onClick={() => setPreviewStage("final")}
+                    aria-label={ui.debug}
+                    aria-haspopup="menu"
+                    aria-expanded={debugMenuOpen}
+                    onClick={() => setDebugMenuOpen((current) => !current)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "ArrowDown") return;
+                      event.preventDefault();
+                      setDebugMenuOpen(true);
+                      window.requestAnimationFrame(() => {
+                        debugMenuRef.current
+                          ?.querySelector<HTMLButtonElement>(
+                            '[role="menuitemradio"]',
+                          )
+                          ?.focus();
+                      });
+                    }}
                   >
-                    {ui.finalPreview}
+                    <span>{ui.debug}</span>
+                    <span aria-hidden="true">▾</span>
                   </button>
-                  <button
-                    className={previewStage === "markdown" ? "active" : ""}
-                    type="button"
-                    aria-pressed={previewStage === "markdown"}
-                    onClick={() => setPreviewStage("markdown")}
+                  <div
+                    className="previewDebugPanel"
+                    role="menu"
+                    aria-label={ui.previewStage}
+                    hidden={!debugMenuOpen}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key !== "ArrowDown" &&
+                        event.key !== "ArrowUp" &&
+                        event.key !== "Home" &&
+                        event.key !== "End"
+                      ) {
+                        return;
+                      }
+                      event.preventDefault();
+                      const items = Array.from(
+                        event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                          '[role="menuitemradio"]',
+                        ),
+                      );
+                      const currentIndex = items.indexOf(
+                        document.activeElement as HTMLButtonElement,
+                      );
+                      const nextIndex =
+                        event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? items.length - 1
+                            : event.key === "ArrowDown"
+                              ? (currentIndex + 1) % items.length
+                              : (currentIndex - 1 + items.length) %
+                                items.length;
+                      items[nextIndex]?.focus();
+                    }}
                   >
-                    {ui.markdownPreview}
-                  </button>
+                    {[
+                      ["final", ui.finalPreview],
+                      ["markdown", ui.markdownPreview],
+                    ].map(([stage, label]) => (
+                      <button
+                        key={stage}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={previewStage === stage}
+                        onClick={() => {
+                          setPreviewStage(stage as PreviewStage);
+                          setDebugMenuOpen(false);
+                        }}
+                      >
+                        <span className="previewDebugCheck" aria-hidden="true">
+                          {previewStage === stage ? "✓" : ""}
+                        </span>
+                        <span>{label}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <button

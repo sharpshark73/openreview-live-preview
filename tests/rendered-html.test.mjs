@@ -62,9 +62,12 @@ test("server-renders the finished OpenReview tool", async () => {
   assert.match(html, /aria-label="Switch to English"/);
   assert.match(html, />English<\/button>/);
   assert.match(html, /aria-label="查找（Ctrl\/⌘\+F）"/);
+  assert.match(html, /aria-label="Debug"/);
+  assert.match(html, /aria-haspopup="menu"/);
   assert.match(html, /aria-label="预览阶段"/);
-  assert.match(html, />最终<\/button>/);
-  assert.match(html, />Markdown<\/button>/);
+  assert.match(html, /role="menuitemradio"/);
+  assert.match(html, />最终<\/span>/);
+  assert.match(html, />Markdown<\/span>/);
   assert.match(html, /placeholder="查找"/);
   assert.match(html, /data-scope="preview"/);
   assert.match(html, /data-codemirror-editor/);
@@ -187,6 +190,7 @@ test("ships the Markdown-stage formula inspector", async () => {
   ]);
 
   assert.match(editorSource, /annotatePostMarkdownMath/);
+  assert.match(editorSource, /previewDebugPanel/);
   assert.match(editorSource, /tex2chtmlPromise/);
   assert.match(editorSource, /getMathJaxErrorMessages/);
   assert.match(editorSource, /showMarkdownMathErrors/);

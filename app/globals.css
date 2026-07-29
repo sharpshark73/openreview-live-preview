@@ -359,12 +359,15 @@ a:focus {
   gap: 9px;
 }
 
-.previewStageSwitch {
-  display: inline-flex;
-  align-items: center;
+.previewDebugMenu {
+  position: relative;
+  z-index: 30;
 }
 
-.previewStageSwitch button {
+.previewDebugTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-height: 24px;
   padding: 2px 7px;
   color: #667176;
@@ -375,19 +378,57 @@ a:focus {
   line-height: 1.2;
 }
 
-.previewStageSwitch button + button {
-  margin-left: -1px;
-}
-
-.previewStageSwitch button:hover,
-.previewStageSwitch button:focus-visible,
-.previewStageSwitch button.active {
-  position: relative;
-  z-index: 1;
+.previewDebugTrigger:hover,
+.previewDebugTrigger:focus-visible,
+.previewDebugTrigger.active {
   color: #fff;
   background: var(--or-blue-dark);
   border-color: var(--or-blue-dark);
   outline: 0;
+}
+
+.previewDebugPanel {
+  position: absolute;
+  z-index: 120;
+  top: calc(100% + 5px);
+  left: 0;
+  display: grid;
+  width: 150px;
+  padding: 5px;
+  background: #fff;
+  border: 1px solid #c7c4be;
+  box-shadow: 0 8px 24px rgba(44, 58, 74, 0.2);
+}
+
+.previewDebugPanel[hidden] {
+  display: none;
+}
+
+.previewDebugPanel button {
+  display: grid;
+  width: 100%;
+  min-height: 30px;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  color: #4d5b61;
+  background: transparent;
+  border: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.previewDebugPanel button:hover,
+.previewDebugPanel button:focus-visible {
+  color: #fff;
+  background: var(--or-blue-dark);
+  outline: 0;
+}
+
+.previewDebugCheck {
+  text-align: center;
 }
 
 .paneHeaderActions {
