@@ -21,6 +21,13 @@ import {
   POST_MARKDOWN_BLOCK_BOUNDARY,
 } from "../lib/post-markdown-math.mjs";
 import {
+  DIFF_DELETE,
+  DIFF_EQUAL,
+  DIFF_INSERT,
+  diffFormulaText,
+  pairFormulaInputs,
+} from "../lib/formula-diff.mjs";
+import {
   SourceEditor,
   type SourceDiagnostic,
   type SourceEditorHandle,
@@ -76,6 +83,8 @@ const UI_TEXT = {
     finalPreview: "最终",
     markdownPreview: "Markdown",
     markdownMathInput: "Markdown 后的 MathJax 输入",
+    originalMarkdownMath: "Markdown 原文中的公式",
+    markdownMathMismatch: "与原 Markdown 不一致",
     formulaPreview: "单公式预览",
     renderingFormula: "正在渲染…",
     mathJaxUnavailable: "MathJax 尚未就绪",
@@ -140,6 +149,8 @@ const UI_TEXT = {
     finalPreview: "Final",
     markdownPreview: "Markdown",
     markdownMathInput: "MathJax input after Markdown",
+    originalMarkdownMath: "Formula in the original Markdown",
+    markdownMathMismatch: "Differs from original Markdown",
     formulaPreview: "Formula preview",
     renderingFormula: "Rendering…",
     mathJaxUnavailable: "MathJax is not ready",
@@ -213,6 +224,7 @@ type HighlightRegistryLike = {
 type HighlightConstructorLike = new (...ranges: Range[]) => unknown;
 
 type MathJaxMathItemLike = {
+  display?: boolean;
   math?: string;
   typesetRoot?: Element | null;
 };
@@ -356,6 +368,15 @@ function downloadText(text: string) {
   URL.revokeObjectURL(url);
 }
 
+function getTextFingerprint(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${value.length}-${hash >>> 0}`;
+}
+
 function getSourceLocation(value: string, offset: number) {
   const before = value.slice(0, offset);
   const lastLineBreak = before.lastIndexOf("\n");
@@ -393,6 +414,7 @@ type MarkdownMathCandidate = {
   contentStart: number;
   contentEnd: number;
   math: string;
+  originalMath?: string;
   display: boolean;
   open: string;
   close: string;
@@ -482,15 +504,79 @@ function collectPostMarkdownText(container: HTMLElement) {
   return { value: parts.join(""), segments };
 }
 
+type RenderedMathReference = {
+  display: boolean;
+  element: Element;
+  math: string;
+};
+
+function getSourceAnchorForElement(
+  element: Element,
+  container: HTMLElement,
+) {
+  let topLevelElement: Element | null = element;
+  while (
+    topLevelElement?.parentElement &&
+    topLevelElement.parentElement !== container
+  ) {
+    topLevelElement = topLevelElement.parentElement;
+  }
+  if (topLevelElement?.parentElement !== container) return null;
+
+  let anchor = topLevelElement.previousElementSibling as HTMLElement | null;
+  while (anchor && !anchor.classList.contains("source-anchor")) {
+    anchor = anchor.previousElementSibling as HTMLElement | null;
+  }
+  return anchor;
+}
+
+function mapOriginalMathByElement(
+  container: HTMLElement,
+  sourceText: string,
+  rendered: RenderedMathReference[],
+) {
+  const groups = new Map<
+    HTMLElement,
+    RenderedMathReference[]
+  >();
+  for (const formula of rendered) {
+    const anchor = getSourceAnchorForElement(formula.element, container);
+    if (!anchor) continue;
+    const group = groups.get(anchor) ?? [];
+    group.push(formula);
+    groups.set(anchor, group);
+  }
+
+  const originalByElement = new Map<Element, string>();
+  for (const [anchor, formulas] of groups) {
+    const sourceStart = Number(anchor.dataset.sourceStart ?? 0);
+    const sourceEnd = Number(anchor.dataset.sourceEnd ?? sourceStart);
+    const sourceFormulas = findPostMarkdownMath(
+      sourceText.slice(sourceStart, sourceEnd),
+    );
+    const pairs = pairFormulaInputs(formulas, sourceFormulas);
+    pairs.forEach((originalMath, index) => {
+      if (originalMath !== undefined) {
+        originalByElement.set(formulas[index].element, originalMath);
+      }
+    });
+  }
+
+  return originalByElement;
+}
+
 function annotatePostMarkdownMath(
   container: HTMLElement,
   inputLabel: string,
+  sourceText: string,
 ) {
   const { value, segments } = collectPostMarkdownText(container);
-  const candidates = findPostMarkdownMath(value).map((match, index) => ({
-    ...match,
-    id: `markdown-math-${index}`,
-  }));
+  const candidates: MarkdownMathCandidate[] = findPostMarkdownMath(value).map(
+    (match, index) => ({
+      ...match,
+      id: `markdown-math-${index}`,
+    }),
+  );
 
   for (const candidate of [...candidates].reverse()) {
     const affectedSegments = segments
@@ -536,6 +622,32 @@ function annotatePostMarkdownMath(
     });
   }
 
+  const renderedReferences = candidates.flatMap((candidate) => {
+    const marker = container.querySelector<HTMLElement>(
+      `[data-markdown-math-id="${candidate.id}"]`,
+    );
+    return marker
+      ? [{
+          display: candidate.display,
+          element: marker,
+          math: candidate.math,
+        }]
+      : [];
+  });
+  const originalByElement = mapOriginalMathByElement(
+    container,
+    sourceText,
+    renderedReferences,
+  );
+  for (const candidate of candidates) {
+    const marker = container.querySelector<HTMLElement>(
+      `[data-markdown-math-id="${candidate.id}"]`,
+    );
+    candidate.originalMath = marker
+      ? originalByElement.get(marker)
+      : undefined;
+  }
+
   return new Map(candidates.map((candidate) => [candidate.id, candidate]));
 }
 
@@ -543,13 +655,44 @@ function annotateMathJaxErrors(
   container: HTMLElement,
   language: Language,
   mathDocument?: MathJaxDocumentLike,
+  sourceText = "",
 ) {
-  const formulaByTypesetRoot = new Map<Element, string>();
-  const mathItems = mathDocument?.getMathItemsWithin?.(container) ?? [];
+  const formulaByTypesetRoot = new Map<
+    Element,
+    { math: string; originalMath?: string }
+  >();
+  const mathItems = (mathDocument?.getMathItemsWithin?.(container) ?? [])
+    .filter(
+      (item) => item.typesetRoot && typeof item.math === "string",
+    )
+    .sort((left, right) => {
+      const leftRoot = left.typesetRoot;
+      const rightRoot = right.typesetRoot;
+      if (!leftRoot || !rightRoot) return 0;
+      return leftRoot.compareDocumentPosition(rightRoot) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+        ? -1
+        : 1;
+    });
+  const renderedReferences: RenderedMathReference[] = mathItems.map(
+    (item) => ({
+      display: Boolean(item.display),
+      element: item.typesetRoot as Element,
+      math: item.math as string,
+    }),
+  );
+  const originalByElement = mapOriginalMathByElement(
+    container,
+    sourceText,
+    renderedReferences,
+  );
 
   for (const item of mathItems) {
     if (item.typesetRoot && typeof item.math === "string") {
-      formulaByTypesetRoot.set(item.typesetRoot, item.math);
+      formulaByTypesetRoot.set(item.typesetRoot, {
+        math: item.math,
+        originalMath: originalByElement.get(item.typesetRoot),
+      });
     }
   }
 
@@ -560,13 +703,17 @@ function annotateMathJaxErrors(
     if (!message) continue;
 
     const typesetRoot = error.closest("mjx-container");
-    const formula = typesetRoot
+    const formulaDetails = typesetRoot
       ? formulaByTypesetRoot.get(typesetRoot)
       : undefined;
+    const formula = formulaDetails?.math;
 
     error.dataset.openreviewMathError = message;
     if (formula !== undefined) {
       error.dataset.openreviewMathSource = formula;
+    }
+    if (formulaDetails?.originalMath !== undefined) {
+      error.dataset.openreviewMathOriginal = formulaDetails.originalMath;
     }
     error.classList.add("mathJaxError");
     error.tabIndex = 0;
@@ -626,6 +773,105 @@ function showMarkdownMathErrors(
   }
   section.append(heading, messageList);
   output.insertAdjacentElement("afterend", section);
+}
+
+type FormulaComparisonOptions = {
+  afterLabel: string;
+  current: string;
+  formulaClassName: string;
+  inputLabelClassName: string;
+  mismatchLabel: string;
+  onToggle?: () => void;
+  original?: string;
+  originalLabel: string;
+  sectionClassName: string;
+};
+
+function createFormulaComparison({
+  afterLabel,
+  current,
+  formulaClassName,
+  inputLabelClassName,
+  mismatchLabel,
+  onToggle,
+  original,
+  originalLabel,
+  sectionClassName,
+}: FormulaComparisonOptions) {
+  const section = document.createElement("section");
+  section.className = sectionClassName;
+  const labelRow = document.createElement("div");
+  labelRow.className = "mathFormulaLabelRow";
+  const label = document.createElement("div");
+  label.className = inputLabelClassName;
+  label.textContent = afterLabel;
+  labelRow.append(label);
+
+  const currentFormula = document.createElement("code");
+  currentFormula.className = formulaClassName;
+  currentFormula.textContent = current;
+  section.append(labelRow, currentFormula);
+
+  if (original === undefined || original === current) return section;
+
+  const changes = diffFormulaText(original, current);
+  const mismatch = document.createElement("button");
+  mismatch.className = "mathFormulaMismatch";
+  mismatch.type = "button";
+  mismatch.textContent = mismatchLabel;
+  mismatch.setAttribute("aria-expanded", "false");
+  labelRow.append(mismatch);
+
+  const diffPanel = document.createElement("div");
+  diffPanel.className = "mathFormulaDiff";
+  diffPanel.hidden = true;
+
+  const appendDiffLine = (
+    lineLabel: string,
+    side: "original" | "rendered",
+  ) => {
+    const row = document.createElement("section");
+    const rowLabel = document.createElement("div");
+    const value = document.createElement("code");
+    row.className = "mathFormulaDiffRow";
+    rowLabel.className = "mathFormulaDiffLabel";
+    rowLabel.textContent = lineLabel;
+    value.className = "mathFormulaDiffValue";
+
+    for (const [operation, text] of changes) {
+      if (
+        (side === "original" && operation === DIFF_INSERT) ||
+        (side === "rendered" && operation === DIFF_DELETE)
+      ) {
+        continue;
+      }
+      const span = document.createElement("span");
+      span.textContent = text;
+      if (operation === DIFF_DELETE) {
+        span.className = "mathFormulaDiffRemoved";
+      } else if (operation === DIFF_INSERT) {
+        span.className = "mathFormulaDiffAdded";
+      } else if (operation !== DIFF_EQUAL) {
+        continue;
+      }
+      value.append(span);
+    }
+    row.append(rowLabel, value);
+    diffPanel.append(row);
+  };
+
+  appendDiffLine(originalLabel, "original");
+  appendDiffLine(afterLabel, "rendered");
+  section.append(diffPanel);
+
+  mismatch.addEventListener("click", () => {
+    const expanded = diffPanel.hidden;
+    diffPanel.hidden = !expanded;
+    mismatch.setAttribute("aria-expanded", String(expanded));
+    window.requestAnimationFrame(() => onToggle?.());
+  });
+
+  return section;
 }
 
 export default function Editor() {
@@ -694,6 +940,7 @@ export default function Editor() {
         : parseOpenReviewMarkdown(text),
     [sanitizationReady, text],
   );
+  const sourceFingerprint = useMemo(() => getTextFingerprint(text), [text]);
   const markdownWarnings = useMemo(
     () => lintOpenReviewMarkdown(text),
     [text],
@@ -823,6 +1070,7 @@ export default function Editor() {
             container,
             language,
             mathJax.startup?.document,
+            text,
           );
           previewSearchRefreshRef.current?.();
         }
@@ -842,6 +1090,7 @@ export default function Editor() {
     previewMode,
     previewStage,
     language,
+    text,
   ]);
 
   useEffect(() => {
@@ -859,11 +1108,18 @@ export default function Editor() {
       markdownMathCandidatesRef.current = annotatePostMarkdownMath(
         container,
         ui.markdownMathInput,
+        text,
       );
       previewSearchRefreshRef.current?.();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [sanitizedHtml, previewMode, previewStage, ui.markdownMathInput]);
+  }, [
+    sanitizedHtml,
+    previewMode,
+    previewStage,
+    text,
+    ui.markdownMathInput,
+  ]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -1462,58 +1718,14 @@ export default function Editor() {
     mathErrorHideTimerRef.current = null;
   };
 
-  const showMathErrorTooltip = (target: EventTarget | null) => {
-    const error = getMathErrorTarget(target);
-    const message = error?.dataset.openreviewMathError;
-    if (!error || !message) {
-      hideMathErrorTooltip();
-      return;
-    }
-
-    cancelMathErrorTooltipHide();
-    const rect = error.getBoundingClientRect();
-    const tooltip = mathErrorTooltipRef.current;
-    if (!tooltip) return;
-
-    mathErrorTargetRef.current = error;
-    const formula = error.dataset.openreviewMathSource;
-    const header = document.createElement("div");
-    header.className = "mathErrorTooltipHeader";
-    header.textContent = ui.mathJaxError;
-
-    const content = document.createElement("div");
-    content.className = "mathErrorTooltipContent";
-
-    if (formula !== undefined) {
-      const formulaSection = document.createElement("section");
-      const formulaLabel = document.createElement("div");
-      const formulaCode = document.createElement("code");
-      formulaSection.className = "mathErrorTooltipSection";
-      formulaLabel.className = "mathErrorTooltipLabel";
-      formulaLabel.textContent = ui.mathJaxInput;
-      formulaCode.className = "mathErrorTooltipFormula";
-      formulaCode.textContent = formula;
-      formulaSection.append(formulaLabel, formulaCode);
-      content.append(formulaSection);
-    }
-
-    const messageSection = document.createElement("section");
-    const messageLabel = document.createElement("div");
-    const messageText = document.createElement("div");
-    messageSection.className = "mathErrorTooltipSection";
-    messageLabel.className = "mathErrorTooltipLabel";
-    messageLabel.textContent = ui.mathJaxMessage;
-    messageText.className = "mathErrorTooltipMessage";
-    messageText.textContent = message;
-    messageSection.append(messageLabel, messageText);
-    content.append(messageSection);
-
-    tooltip.replaceChildren(header, content);
-    tooltip.className = "mathErrorTooltip";
+  const positionMathErrorTooltip = (
+    target: HTMLElement,
+    tooltip: HTMLElement,
+  ) => {
+    const rect = target.getBoundingClientRect();
     tooltip.style.left = "12px";
     tooltip.style.top = "12px";
     tooltip.hidden = false;
-
     const tooltipRect = tooltip.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom - 12;
     const placeAbove =
@@ -1531,6 +1743,60 @@ export default function Editor() {
     tooltip.classList.toggle("above", placeAbove);
     tooltip.style.left = `${left}px`;
     tooltip.style.top = `${top}px`;
+  };
+
+  const showMathErrorTooltip = (target: EventTarget | null) => {
+    const error = getMathErrorTarget(target);
+    const message = error?.dataset.openreviewMathError;
+    if (!error || !message) {
+      hideMathErrorTooltip();
+      return;
+    }
+
+    cancelMathErrorTooltipHide();
+    const tooltip = mathErrorTooltipRef.current;
+    if (!tooltip) return;
+
+    mathErrorTargetRef.current = error;
+    const formula = error.dataset.openreviewMathSource;
+    const originalFormula = error.dataset.openreviewMathOriginal;
+    const header = document.createElement("div");
+    header.className = "mathErrorTooltipHeader";
+    header.textContent = ui.mathJaxError;
+
+    const content = document.createElement("div");
+    content.className = "mathErrorTooltipContent";
+
+    if (formula !== undefined) {
+      content.append(
+        createFormulaComparison({
+          afterLabel: ui.mathJaxInput,
+          current: formula,
+          formulaClassName: "mathErrorTooltipFormula",
+          inputLabelClassName: "mathErrorTooltipLabel",
+          mismatchLabel: ui.markdownMathMismatch,
+          onToggle: () => positionMathErrorTooltip(error, tooltip),
+          original: originalFormula,
+          originalLabel: ui.originalMarkdownMath,
+          sectionClassName: "mathErrorTooltipSection",
+        }),
+      );
+    }
+
+    const messageSection = document.createElement("section");
+    const messageLabel = document.createElement("div");
+    const messageText = document.createElement("div");
+    messageSection.className = "mathErrorTooltipSection";
+    messageLabel.className = "mathErrorTooltipLabel";
+    messageLabel.textContent = ui.mathJaxMessage;
+    messageText.className = "mathErrorTooltipMessage";
+    messageText.textContent = message;
+    messageSection.append(messageLabel, messageText);
+    content.append(messageSection);
+
+    tooltip.replaceChildren(header, content);
+    tooltip.className = "mathErrorTooltip";
+    positionMathErrorTooltip(error, tooltip);
   };
 
   const handleMathErrorPointerMove = (target: EventTarget | null) => {
@@ -1716,16 +1982,23 @@ export default function Editor() {
     header.textContent = ui.formulaPreview;
     const content = document.createElement("div");
     content.className = "markdownMathTooltipContent";
-    const inputLabel = document.createElement("div");
-    inputLabel.className = "markdownMathTooltipLabel";
-    inputLabel.textContent = ui.markdownMathInput;
-    const input = document.createElement("code");
-    input.className = "markdownMathTooltipFormula";
-    input.textContent = candidate.math;
     const output = document.createElement("div");
     output.className = "markdownMathTooltipOutput";
     output.textContent = ui.renderingFormula;
-    content.append(inputLabel, input, output);
+    content.append(
+      createFormulaComparison({
+        afterLabel: ui.markdownMathInput,
+        current: candidate.math,
+        formulaClassName: "markdownMathTooltipFormula",
+        inputLabelClassName: "markdownMathTooltipLabel",
+        mismatchLabel: ui.markdownMathMismatch,
+        onToggle: () => positionMarkdownMathTooltip(marker, tooltip),
+        original: candidate.originalMath,
+        originalLabel: ui.originalMarkdownMath,
+        sectionClassName: "markdownMathTooltipInput",
+      }),
+      output,
+    );
     tooltip.replaceChildren(header, content);
     tooltip.className = "markdownMathTooltip";
     positionMarkdownMathTooltip(marker, tooltip);
@@ -2202,7 +2475,7 @@ export default function Editor() {
                       Preview:
                     </strong>{" "}
                     <div
-                      key={`published-${previewStage}-${language}`}
+                      key={`published-${previewStage}-${language}-${sourceFingerprint}`}
                       ref={previewRef}
                       className={`note-content-value markdown-rendered ${
                         previewStage === "markdown"
@@ -2216,7 +2489,7 @@ export default function Editor() {
                   </div>
                 ) : (
                   <div
-                    key={`form-${previewStage}-${language}`}
+                    key={`form-${previewStage}-${language}-${sourceFingerprint}`}
                     ref={previewRef}
                     className={`form-preview markdown-rendered ${
                       previewStage === "markdown"

@@ -11,6 +11,12 @@ import {
   POST_MARKDOWN_BLOCK_BOUNDARY,
 } from "../lib/post-markdown-math.mjs";
 import {
+  DIFF_DELETE,
+  DIFF_INSERT,
+  diffFormulaText,
+  pairFormulaInputs,
+} from "../lib/formula-diff.mjs";
+import {
   parseOpenReviewMarkdown,
   renderOpenReviewMarkdown,
   renderOpenReviewMarkdownWithAnchors,
@@ -121,6 +127,7 @@ test("uses CodeMirror 6 for Markdown editing, search, lint, and source sync", as
   const dependencies = JSON.parse(packageSource).dependencies;
 
   assert.equal(dependencies.codemirror, "^6.0.2");
+  assert.equal(dependencies["fast-diff"], "^1.3.0");
   assert.ok(dependencies["@codemirror/lang-markdown"]);
   assert.ok(dependencies["@codemirror/search"]);
   assert.ok(dependencies["@codemirror/lint"]);
@@ -183,6 +190,37 @@ test("finds the formulas MathJax receives after Markdown rendering", () => {
   assert.equal(findPostMarkdownMath("\\$not math$").length, 0);
 });
 
+test("pairs rendered formulas with source Markdown and highlights changes", () => {
+  assert.deepEqual(
+    pairFormulaInputs(
+      [
+        { math: "x", display: false },
+        { math: "\\widetilde{E}1", display: false },
+      ],
+      [
+        { math: "ignored code", display: false },
+        { math: "x", display: false },
+        { math: "\\widetilde{E}*1", display: false },
+      ],
+    ),
+    ["x", "\\widetilde{E}*1"],
+  );
+
+  const changes = diffFormulaText(
+    "\\widetilde{E}*1",
+    "\\widetilde{E}1",
+  );
+  assert.ok(
+    changes.some(
+      ([operation, value]) => operation === DIFF_DELETE && value === "*",
+    ),
+  );
+  assert.equal(
+    changes.some(([operation]) => operation === DIFF_INSERT),
+    false,
+  );
+});
+
 test("ships the Markdown-stage formula inspector", async () => {
   const [editorSource, styles] = await Promise.all([
     readFile(new URL("../app/editor.tsx", import.meta.url), "utf8"),
@@ -194,10 +232,16 @@ test("ships the Markdown-stage formula inspector", async () => {
   assert.match(editorSource, /tex2chtmlPromise/);
   assert.match(editorSource, /getMathJaxErrorMessages/);
   assert.match(editorSource, /showMarkdownMathErrors/);
+  assert.match(editorSource, /openreviewMathOriginal/);
+  assert.match(editorSource, /createFormulaComparison/);
   assert.match(editorSource, /MathJax input after Markdown/);
+  assert.match(editorSource, /Differs from original Markdown/);
   assert.match(styles, /\.markdownMathCandidate/);
   assert.match(styles, /\.markdownMathTooltipOutput/);
   assert.match(styles, /\.markdownMathTooltipError/);
+  assert.match(styles, /\.mathFormulaMismatch/);
+  assert.match(styles, /\.mathFormulaDiffRemoved/);
+  assert.match(styles, /\.mathFormulaDiffAdded/);
 });
 
 test("ships the AGPL license and first-visit unofficial notice", async () => {
@@ -221,6 +265,8 @@ test("ships the AGPL license and first-visit unofficial notice", async () => {
     notices,
     /not\s+affiliated with, authorized by, or endorsed by OpenReview/,
   );
+  assert.match(notices, /fast-diff 1\.3\.0/);
+  assert.match(notices, /Apache License 2\.0/);
 });
 
 test("escapes valid and invalid raw HTML like OpenReview", () => {

@@ -1179,6 +1179,91 @@ a:focus {
   padding: 9px 10px 10px;
 }
 
+.mathFormulaLabelRow {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.mathFormulaLabelRow .mathErrorTooltipLabel {
+  margin-bottom: 0;
+}
+
+.mathFormulaMismatch {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  color: #875a00;
+  background: #fff7d9;
+  border: 1px solid #d8bb58;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.mathFormulaMismatch:hover,
+.mathFormulaMismatch:focus-visible,
+.mathFormulaMismatch[aria-expanded="true"] {
+  color: #fff;
+  background: #8a6500;
+  border-color: #8a6500;
+  outline: 0;
+}
+
+.mathFormulaDiff {
+  display: grid;
+  gap: 7px;
+  margin-top: 7px;
+  padding: 7px;
+  background: #faf9f6;
+  border: 1px solid #dedbd5;
+}
+
+.mathFormulaDiff[hidden] {
+  display: none;
+}
+
+.mathFormulaDiffRow {
+  min-width: 0;
+}
+
+.mathFormulaDiffLabel {
+  margin-bottom: 3px;
+  color: #6a7076;
+  font-size: 0.61rem;
+  font-weight: 700;
+}
+
+.mathFormulaDiffValue {
+  display: block;
+  max-height: 7rem;
+  padding: 6px 7px;
+  overflow: auto;
+  color: #202428;
+  background: #fff;
+  border: 1px solid #e0e2e4;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.mathFormulaDiffRemoved {
+  color: #7c1711;
+  background: #ffd8d3;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.mathFormulaDiffAdded {
+  color: #165b31;
+  background: #d8f3df;
+}
+
 .markdownMathTooltipLabel {
   color: #6a7076;
   font-size: 0.64rem;

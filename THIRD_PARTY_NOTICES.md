@@ -43,3 +43,9 @@ under the MIT License. Its checked-in browser bundle is generated from the
 installed package and includes markdownlint's MIT-licensed runtime
 dependencies. Their package metadata and license files remain available under
 `node_modules` after installation.
+
+## fast-diff
+
+Formula comparisons use
+[fast-diff 1.3.0](https://github.com/jhchen/fast-diff), distributed under the
+Apache License 2.0.
