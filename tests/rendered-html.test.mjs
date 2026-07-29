@@ -337,6 +337,22 @@ test("ships the Markdown-stage formula inspector", async () => {
   assert.match(editorSource, /TOOLTIP_SWITCH_DELAY_MS = 100/);
   assert.match(editorSource, /mathErrorSwitchTimerRef/);
   assert.match(editorSource, /markdownMathSwitchTimerRef/);
+  assert.match(
+    editorSource,
+    /mathErrorTooltipRef\.current\?\.contains\(\s*document\.activeElement/,
+  );
+  assert.match(
+    editorSource,
+    /markdownMathTooltipRef\.current\?\.contains\(\s*document\.activeElement/,
+  );
+  assert.match(
+    editorSource,
+    /onPointerLeave=\{scheduleMathErrorTooltipHide\}/,
+  );
+  assert.match(
+    editorSource,
+    /onPointerLeave=\{scheduleMarkdownMathTooltipHide\}/,
+  );
   assert.match(editorSource, /REMINDER_SETTINGS_KEY/);
   assert.match(editorSource, /isLostMathDelimiterEnabled/);
   assert.match(editorSource, /Possible formula loss during Markdown/);

@@ -2092,6 +2092,13 @@ export default function Editor() {
     if (mathErrorHideTimerRef.current !== null) return;
     mathErrorHideTimerRef.current = window.setTimeout(() => {
       mathErrorHideTimerRef.current = null;
+      if (
+        mathErrorTooltipRef.current?.contains(
+          document.activeElement,
+        )
+      ) {
+        return;
+      }
       hideMathErrorTooltip();
     }, 140);
   };
@@ -2274,6 +2281,13 @@ export default function Editor() {
     if (markdownMathHideTimerRef.current !== null) return;
     markdownMathHideTimerRef.current = window.setTimeout(() => {
       markdownMathHideTimerRef.current = null;
+      if (
+        markdownMathTooltipRef.current?.contains(
+          document.activeElement,
+        )
+      ) {
+        return;
+      }
       hideMarkdownMathTooltip();
     }, 140);
   };
@@ -3044,7 +3058,15 @@ export default function Editor() {
                   showMathErrorTooltip(event.target);
                 }
               }}
-              onBlur={() => {
+              onBlur={(event) => {
+                const nextTarget = event.relatedTarget;
+                if (
+                  nextTarget instanceof Node &&
+                  (mathErrorTooltipRef.current?.contains(nextTarget) ||
+                    markdownMathTooltipRef.current?.contains(nextTarget))
+                ) {
+                  return;
+                }
                 if (previewStage === "markdown") {
                   scheduleMarkdownMathTooltipHide();
                 } else {
@@ -3098,7 +3120,17 @@ export default function Editor() {
         className="mathErrorTooltip below"
         role="tooltip"
         onPointerEnter={keepMathErrorTooltipOpen}
-        onPointerLeave={hideMathErrorTooltip}
+        onPointerLeave={scheduleMathErrorTooltipHide}
+        onFocus={keepMathErrorTooltipOpen}
+        onBlur={(event) => {
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          ) {
+            return;
+          }
+          scheduleMathErrorTooltipHide();
+        }}
         hidden
       />
       <div
@@ -3106,7 +3138,17 @@ export default function Editor() {
         className="markdownMathTooltip"
         role="tooltip"
         onPointerEnter={keepMarkdownMathTooltipOpen}
-        onPointerLeave={hideMarkdownMathTooltip}
+        onPointerLeave={scheduleMarkdownMathTooltipHide}
+        onFocus={keepMarkdownMathTooltipOpen}
+        onBlur={(event) => {
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          ) {
+            return;
+          }
+          scheduleMarkdownMathTooltipHide();
+        }}
         hidden
       />
       {settingsOpen ? (
