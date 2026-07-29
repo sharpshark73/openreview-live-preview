@@ -317,6 +317,15 @@ test("ships the Markdown-stage formula inspector", async () => {
   ]);
 
   assert.match(editorSource, /annotatePostMarkdownMath/);
+  assert.match(
+    editorSource,
+    /const renderedHtml = useMemo\([\s\S]*__html: sanitizedHtml/,
+  );
+  assert.equal(
+    editorSource.match(/dangerouslySetInnerHTML=\{renderedHtml\}/g)
+      ?.length,
+    2,
+  );
   assert.match(editorSource, /annotateLostSourceMath/);
   assert.match(editorSource, /markdownLostMathCandidatesRef/);
   assert.match(editorSource, /HTMLDomStrings/);

@@ -1265,6 +1265,10 @@ export default function Editor() {
         : parseOpenReviewMarkdown(text),
     [sanitizationReady, text],
   );
+  const renderedHtml = useMemo(
+    () => ({ __html: sanitizedHtml }),
+    [sanitizedHtml],
+  );
   const sourceFingerprint = useMemo(() => getTextFingerprint(text), [text]);
   const reminderFingerprint = [
     reminderSettings.mathJaxErrors,
@@ -3068,7 +3072,7 @@ export default function Editor() {
                       }`}
                       data-rendered-html
                       onDoubleClick={handlePreviewDoubleClick}
-                      dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+                      dangerouslySetInnerHTML={renderedHtml}
                     />
                   </div>
                 ) : (
@@ -3082,7 +3086,7 @@ export default function Editor() {
                     }`}
                     data-rendered-html
                     onDoubleClick={handlePreviewDoubleClick}
-                    dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+                    dangerouslySetInnerHTML={renderedHtml}
                   />
                 )}
               </div>
