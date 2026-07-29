@@ -1132,6 +1132,30 @@ a:focus {
   outline-offset: 1px;
 }
 
+.markdownStagePreview .markdownLostMathCandidate {
+  padding: 0 1px;
+  color: inherit;
+  background: rgba(220, 139, 32, 0.2);
+  border-bottom: 1px dashed rgba(160, 72, 16, 0.9);
+  cursor: help;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.markdownStagePreview .markdownLostMathCandidate:hover,
+.markdownStagePreview .markdownLostMathCandidate:focus-visible,
+.markdownStagePreview .markdownLostMathCandidateActive {
+  background: rgba(231, 119, 62, 0.3);
+  outline: 2px solid rgba(160, 72, 16, 0.38);
+  outline-offset: 1px;
+}
+
+.markdownStagePreview .markdownLostMathBlock {
+  outline: 2px dashed rgba(160, 72, 16, 0.7);
+  outline-offset: 3px;
+  cursor: help;
+}
+
 .mathErrorTooltip {
   position: fixed;
   z-index: 100;
@@ -1164,6 +1188,14 @@ a:focus {
   font-size: 0.75rem;
   line-height: 1.45;
   overscroll-behavior: contain;
+}
+
+.markdownLostMathTooltip {
+  border-top-color: #a84d13;
+}
+
+.markdownLostMathTooltip .markdownMathTooltipHeader {
+  color: #8d3e0d;
 }
 
 .markdownMathTooltipHeader {
@@ -1332,6 +1364,28 @@ a:focus {
   gap: 4px;
   overflow-wrap: anywhere;
   user-select: text;
+}
+
+.markdownLostMathExplanation {
+  padding: 8px;
+  color: #633112;
+  background: #fff7e8;
+  border: 1px solid rgba(168, 77, 19, 0.28);
+  border-left: 3px solid #a84d13;
+  border-radius: 2px;
+}
+
+.markdownLostMathExplanationLabel {
+  margin: 7px 0 3px;
+  color: #8d3e0d;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.markdownLostMathExplanationLabel:first-child {
+  margin-top: 0;
 }
 
 .mathErrorTooltipHeader {

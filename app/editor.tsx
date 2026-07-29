@@ -12,7 +12,10 @@ import {
   parseOpenReviewMarkdown,
   renderOpenReviewMarkdownWithAnchors,
 } from "../lib/openreview-renderer.mjs";
-import { lintOpenReviewMarkdown } from "../lib/markdown-warnings.mjs";
+import {
+  findSourceMarkdownMath,
+  lintOpenReviewMarkdown,
+} from "../lib/markdown-warnings.mjs";
 import { lintAndFixMarkdown } from "../lib/markdown-lint-fix.mjs";
 import { findLiteralMatches } from "../lib/text-search.mjs";
 import { getPreferredLanguage } from "../lib/language-preference.mjs";
@@ -25,6 +28,7 @@ import {
   DIFF_EQUAL,
   DIFF_INSERT,
   diffFormulaText,
+  matchFormulaInputs,
   pairFormulaInputs,
 } from "../lib/formula-diff.mjs";
 import {
@@ -86,6 +90,16 @@ const UI_TEXT = {
     originalMarkdownMath: "Markdown 原文中的公式",
     markdownMathMismatch: "与原 Markdown 不一致",
     formulaPreview: "单公式预览",
+    lostMathTitle: "公式在 Markdown 阶段丢失",
+    lostMathResult: "Markdown 后的结构",
+    lostMathReason: "原因",
+    lostMathReasonText:
+      "Markdown 改写了公式内容或插入了 HTML 标签，MathJax 无法在同一段 DOM 文本中找到完整的公式分隔符。",
+    lostMathSuggestion: "建议",
+    lostMathUnderscoreHint:
+      "将公式中的 _ 写成 \\_，避免被 Markdown 当作强调标记。",
+    lostMathGenericHint:
+      "检查并转义公式中的 Markdown 特殊字符。",
     renderingFormula: "正在渲染…",
     mathJaxUnavailable: "MathJax 尚未就绪",
     formulaRenderFailed: "公式渲染失败",
@@ -152,6 +166,16 @@ const UI_TEXT = {
     originalMarkdownMath: "Formula in the original Markdown",
     markdownMathMismatch: "Differs from original Markdown",
     formulaPreview: "Formula preview",
+    lostMathTitle: "Formula lost during Markdown rendering",
+    lostMathResult: "Structure after Markdown",
+    lostMathReason: "Reason",
+    lostMathReasonText:
+      "Markdown changed the formula or inserted HTML elements, so MathJax cannot find both delimiters in one DOM text segment.",
+    lostMathSuggestion: "Suggestion",
+    lostMathUnderscoreHint:
+      "Write _ as \\_ inside the formula so Markdown does not treat it as emphasis.",
+    lostMathGenericHint:
+      "Check and escape Markdown-sensitive characters inside the formula.",
     renderingFormula: "Rendering…",
     mathJaxUnavailable: "MathJax is not ready",
     formulaRenderFailed: "Formula rendering failed",
@@ -420,6 +444,13 @@ type MarkdownMathCandidate = {
   close: string;
 };
 
+type MarkdownLostMathCandidate = {
+  id: string;
+  markdownHtml: string;
+  originalSource: string;
+  suggestion: string;
+};
+
 function collectPostMarkdownText(container: HTMLElement) {
   const parts: string[] = [];
   const segments: RenderedTextSegment[] = [];
@@ -517,7 +548,7 @@ function mapOriginalMathByElement(
   for (const [anchor, formulas] of groups) {
     const sourceStart = Number(anchor.dataset.sourceStart ?? 0);
     const sourceEnd = Number(anchor.dataset.sourceEnd ?? sourceStart);
-    const sourceFormulas = findPostMarkdownMath(
+    const sourceFormulas = findSourceMarkdownMath(
       sourceText.slice(sourceStart, sourceEnd),
     );
     const pairs = pairFormulaInputs(formulas, sourceFormulas);
@@ -531,10 +562,220 @@ function mapOriginalMathByElement(
   return originalByElement;
 }
 
+function collectVisibleText(container: HTMLElement) {
+  const parts: string[] = [];
+  const segments: RenderedTextSegment[] = [];
+  let length = 0;
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        if (node instanceof Text) return NodeFilter.FILTER_ACCEPT;
+        if (
+          node instanceof HTMLElement &&
+          node.matches("script, style, textarea, [hidden]")
+        ) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (node instanceof HTMLElement && node.tagName === "BR") {
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        return NodeFilter.FILTER_SKIP;
+      },
+    },
+  );
+
+  let current = walker.nextNode();
+  while (current) {
+    if (current instanceof Text) {
+      const value = current.nodeValue ?? "";
+      if (value) {
+        segments.push({
+          node: current,
+          start: length,
+          end: length + value.length,
+        });
+        parts.push(value);
+        length += value.length;
+      }
+    } else if (current instanceof HTMLElement && current.tagName === "BR") {
+      parts.push("\n");
+      length += 1;
+    }
+    current = walker.nextNode();
+  }
+  return { value: parts.join(""), segments };
+}
+
+function getMarkdownFormulaProjection(sourceFormula: string) {
+  const markdownHtml = String(
+    parseOpenReviewMarkdown(sourceFormula),
+  ).trim();
+  const template = document.createElement("template");
+  template.innerHTML = markdownHtml;
+  return {
+    markdownHtml,
+    visibleText: template.content.textContent ?? "",
+  };
+}
+
+function hasUnescapedUnderscore(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "_") continue;
+    let slashCount = 0;
+    for (
+      let slash = index - 1;
+      slash >= 0 && value[slash] === "\\";
+      slash -= 1
+    ) {
+      slashCount += 1;
+    }
+    if (slashCount % 2 === 0) return true;
+  }
+  return false;
+}
+
+function annotateLostSourceMath(
+  container: HTMLElement,
+  sourceText: string,
+  rendered: RenderedMathReference[],
+  inputLabel: string,
+  underscoreSuggestion: string,
+  genericSuggestion: string,
+) {
+  const renderedByAnchor = new Map<
+    HTMLElement,
+    RenderedMathReference[]
+  >();
+  for (const formula of rendered) {
+    const anchor = getSourceAnchorForElement(formula.element, container);
+    if (!anchor) continue;
+    const group = renderedByAnchor.get(anchor) ?? [];
+    group.push(formula);
+    renderedByAnchor.set(anchor, group);
+  }
+
+  const lostCandidates = new Map<string, MarkdownLostMathCandidate>();
+  let lostIndex = 0;
+  for (const anchor of container.querySelectorAll<HTMLElement>(
+    ":scope > .source-anchor",
+  )) {
+    let block = anchor.nextElementSibling as HTMLElement | null;
+    while (block?.classList.contains("source-anchor")) {
+      block = block.nextElementSibling as HTMLElement | null;
+    }
+    if (!block) continue;
+
+    const sourceStart = Number(anchor.dataset.sourceStart ?? 0);
+    const sourceEnd = Number(anchor.dataset.sourceEnd ?? sourceStart);
+    const sourceBlock = sourceText.slice(sourceStart, sourceEnd);
+    const sourceFormulas = findSourceMarkdownMath(sourceBlock);
+    if (sourceFormulas.length === 0) continue;
+
+    const renderedFormulas = renderedByAnchor.get(anchor) ?? [];
+    const matchedSourceIndexes = new Set(
+      matchFormulaInputs(renderedFormulas, sourceFormulas).filter(
+        (index): index is number => index !== undefined,
+      ),
+    );
+    if (matchedSourceIndexes.size === sourceFormulas.length) continue;
+
+    const visible = collectVisibleText(block);
+    const pending: Array<{
+      candidate: MarkdownLostMathCandidate;
+      end: number;
+      start: number;
+    }> = [];
+    let visibleCursor = 0;
+
+    sourceFormulas.forEach((formula, formulaIndex) => {
+      const originalSource = sourceBlock.slice(formula.start, formula.end);
+      const projection = getMarkdownFormulaProjection(originalSource);
+      const projectedStart = projection.visibleText
+        ? visible.value.indexOf(projection.visibleText, visibleCursor)
+        : -1;
+      if (projectedStart !== -1) {
+        visibleCursor = projectedStart + projection.visibleText.length;
+      }
+      if (matchedSourceIndexes.has(formulaIndex)) return;
+
+      const id = `markdown-lost-math-${lostIndex}`;
+      lostIndex += 1;
+      const candidate: MarkdownLostMathCandidate = {
+        id,
+        markdownHtml: projection.markdownHtml,
+        originalSource,
+        suggestion: hasUnescapedUnderscore(originalSource)
+          ? underscoreSuggestion
+          : genericSuggestion,
+      };
+      lostCandidates.set(id, candidate);
+      if (projectedStart !== -1 && projection.visibleText) {
+        pending.push({
+          candidate,
+          start: projectedStart,
+          end: projectedStart + projection.visibleText.length,
+        });
+      } else if (!block.dataset.markdownLostMathId) {
+        block.classList.add("markdownLostMathBlock");
+        block.dataset.markdownLostMathId = id;
+        block.tabIndex = 0;
+        block.setAttribute("aria-label", `${inputLabel}: ${originalSource}`);
+      }
+    });
+
+    for (const { candidate, start, end } of pending.reverse()) {
+      const affectedSegments = visible.segments
+        .filter((segment) => segment.start < end && segment.end > start)
+        .reverse();
+      for (const segment of affectedSegments) {
+        const localStart = Math.max(0, start - segment.start);
+        const localEnd = Math.min(
+          segment.end - segment.start,
+          end - segment.start,
+        );
+        if (localStart >= localEnd) continue;
+        const after = segment.node.splitText(localEnd);
+        const selected =
+          localStart === 0
+            ? segment.node
+            : segment.node.splitText(localStart);
+        const marker = document.createElement("span");
+        marker.className = "markdownLostMathCandidate";
+        marker.dataset.markdownLostMathId = candidate.id;
+        marker.setAttribute("role", "button");
+        marker.tabIndex = 0;
+        marker.setAttribute(
+          "aria-label",
+          `${inputLabel}: ${candidate.originalSource}`,
+        );
+        selected.parentNode?.insertBefore(marker, after);
+        marker.append(selected);
+      }
+    }
+  }
+
+  for (const candidate of lostCandidates.values()) {
+    const markers = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        `[data-markdown-lost-math-id="${candidate.id}"]`,
+      ),
+    );
+    markers.forEach((marker, index) => {
+      marker.tabIndex = index === 0 ? 0 : -1;
+    });
+  }
+  return lostCandidates;
+}
+
 function annotatePostMarkdownMath(
   container: HTMLElement,
   inputLabel: string,
   sourceText: string,
+  lostInputLabel: string,
+  underscoreSuggestion: string,
+  genericSuggestion: string,
 ) {
   const { value, segments } = collectPostMarkdownText(container);
   const candidates: MarkdownMathCandidate[] = findPostMarkdownMath(value).map(
@@ -614,7 +855,19 @@ function annotatePostMarkdownMath(
       : undefined;
   }
 
-  return new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  return {
+    recognized: new Map(
+      candidates.map((candidate) => [candidate.id, candidate]),
+    ),
+    lost: annotateLostSourceMath(
+      container,
+      sourceText,
+      renderedReferences,
+      lostInputLabel,
+      underscoreSuggestion,
+      genericSuggestion,
+    ),
+  };
 }
 
 function annotateMathJaxErrors(
@@ -883,6 +1136,9 @@ export default function Editor() {
   const markdownMathCandidatesRef = useRef<
     Map<string, MarkdownMathCandidate>
   >(new Map());
+  const markdownLostMathCandidatesRef = useRef<
+    Map<string, MarkdownLostMathCandidate>
+  >(new Map());
   const markdownMathCacheRef = useRef<Map<string, Element>>(new Map());
   const lintUndoRef = useRef<string | null>(null);
   const findBarRef = useRef<HTMLElement>(null);
@@ -1061,6 +1317,7 @@ export default function Editor() {
 
   useEffect(() => {
     markdownMathCandidatesRef.current.clear();
+    markdownLostMathCandidatesRef.current.clear();
     markdownMathTargetIdRef.current = null;
     markdownMathRequestRef.current += 1;
     if (markdownMathTooltipRef.current) {
@@ -1071,11 +1328,16 @@ export default function Editor() {
     const frame = window.requestAnimationFrame(() => {
       const container = previewRef.current;
       if (!container) return;
-      markdownMathCandidatesRef.current = annotatePostMarkdownMath(
+      const annotations = annotatePostMarkdownMath(
         container,
         ui.markdownMathInput,
         text,
+        ui.lostMathTitle,
+        ui.lostMathUnderscoreHint,
+        ui.lostMathGenericHint,
       );
+      markdownMathCandidatesRef.current = annotations.recognized;
+      markdownLostMathCandidatesRef.current = annotations.lost;
       previewSearchRefreshRef.current?.();
     });
     return () => window.cancelAnimationFrame(frame);
@@ -1084,6 +1346,9 @@ export default function Editor() {
     previewMode,
     previewStage,
     text,
+    ui.lostMathGenericHint,
+    ui.lostMathTitle,
+    ui.lostMathUnderscoreHint,
     ui.markdownMathInput,
   ]);
 
@@ -1779,14 +2044,21 @@ export default function Editor() {
 
   const getMarkdownMathTarget = (target: EventTarget | null) =>
     target instanceof HTMLElement
-      ? target.closest<HTMLElement>("[data-markdown-math-id]")
+      ? target.closest<HTMLElement>(
+          "[data-markdown-math-id], [data-markdown-lost-math-id]",
+        )
       : null;
 
   const clearMarkdownMathTarget = () => {
     previewRef.current
-      ?.querySelectorAll(".markdownMathCandidateActive")
+      ?.querySelectorAll(
+        ".markdownMathCandidateActive, .markdownLostMathCandidateActive",
+      )
       .forEach((element) =>
-        element.classList.remove("markdownMathCandidateActive"),
+        element.classList.remove(
+          "markdownMathCandidateActive",
+          "markdownLostMathCandidateActive",
+        ),
       );
     markdownMathTargetIdRef.current = null;
   };
@@ -1919,6 +2191,83 @@ export default function Editor() {
 
   const showMarkdownMathTooltip = (target: EventTarget | null) => {
     const marker = getMarkdownMathTarget(target);
+    const lostId = marker?.dataset.markdownLostMathId;
+    const lostCandidate = lostId
+      ? markdownLostMathCandidatesRef.current.get(lostId)
+      : undefined;
+    if (marker && lostId && lostCandidate) {
+      if (lostId === markdownMathTargetIdRef.current) {
+        cancelMarkdownMathTooltipHide();
+        return;
+      }
+
+      cancelMarkdownMathTooltipHide();
+      if (markdownMathRenderTimerRef.current !== null) {
+        window.clearTimeout(markdownMathRenderTimerRef.current);
+        markdownMathRenderTimerRef.current = null;
+      }
+      markdownMathRequestRef.current += 1;
+      clearMarkdownMathTarget();
+      markdownMathTargetIdRef.current = lostId;
+      previewRef.current
+        ?.querySelectorAll<HTMLElement>("[data-markdown-lost-math-id]")
+        .forEach((element) => {
+          if (element.dataset.markdownLostMathId === lostId) {
+            element.classList.add("markdownLostMathCandidateActive");
+          }
+        });
+
+      const tooltip = markdownMathTooltipRef.current;
+      if (!tooltip) return;
+      const header = document.createElement("div");
+      header.className = "markdownMathTooltipHeader";
+      header.textContent = ui.lostMathTitle;
+      const content = document.createElement("div");
+      content.className = "markdownMathTooltipContent";
+
+      const appendCodeSection = (label: string, value: string) => {
+        const section = document.createElement("section");
+        const heading = document.createElement("div");
+        const code = document.createElement("code");
+        heading.className = "markdownMathTooltipLabel";
+        heading.textContent = label;
+        code.className = "markdownMathTooltipFormula";
+        code.textContent = value;
+        section.append(heading, code);
+        content.append(section);
+      };
+      appendCodeSection(
+        ui.originalMarkdownMath,
+        lostCandidate.originalSource,
+      );
+      appendCodeSection(ui.lostMathResult, lostCandidate.markdownHtml);
+
+      const explanation = document.createElement("section");
+      explanation.className = "markdownLostMathExplanation";
+      const reasonLabel = document.createElement("div");
+      reasonLabel.className = "markdownLostMathExplanationLabel";
+      reasonLabel.textContent = ui.lostMathReason;
+      const reason = document.createElement("div");
+      reason.textContent = ui.lostMathReasonText;
+      const suggestionLabel = document.createElement("div");
+      suggestionLabel.className = "markdownLostMathExplanationLabel";
+      suggestionLabel.textContent = ui.lostMathSuggestion;
+      const suggestion = document.createElement("div");
+      suggestion.textContent = lostCandidate.suggestion;
+      explanation.append(
+        reasonLabel,
+        reason,
+        suggestionLabel,
+        suggestion,
+      );
+      content.append(explanation);
+
+      tooltip.replaceChildren(header, content);
+      tooltip.className = "markdownMathTooltip markdownLostMathTooltip";
+      positionMarkdownMathTooltip(marker, tooltip);
+      return;
+    }
+
     const id = marker?.dataset.markdownMathId;
     const candidate = id
       ? markdownMathCandidatesRef.current.get(id)

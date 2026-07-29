@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import DOMPurify from "isomorphic-dompurify";
 import { lintAndFixMarkdown } from "../lib/markdown-lint-fix.mjs";
-import { lintOpenReviewMarkdown } from "../lib/markdown-warnings.mjs";
+import {
+  findSourceMarkdownMath,
+  lintOpenReviewMarkdown,
+} from "../lib/markdown-warnings.mjs";
 import { findLiteralMatches } from "../lib/text-search.mjs";
 import { getPreferredLanguage } from "../lib/language-preference.mjs";
 import {
@@ -14,6 +17,7 @@ import {
   DIFF_DELETE,
   DIFF_INSERT,
   diffFormulaText,
+  matchFormulaInputs,
   pairFormulaInputs,
 } from "../lib/formula-diff.mjs";
 import {
@@ -229,6 +233,37 @@ test("pairs rendered formulas with source Markdown and highlights changes", () =
     changes.some(([operation]) => operation === DIFF_INSERT),
     false,
   );
+
+  assert.deepEqual(
+    matchFormulaInputs(
+      [{ math: "x", display: false }],
+      [
+        { math: " {E}_{1} = {E}_{x}", display: false },
+        { math: "x", display: false },
+      ],
+    ),
+    [1],
+  );
+});
+
+test("finds source formulas but ignores Markdown code regions", () => {
+  const source = [
+    "$x$",
+    "",
+    "`$inlineCode$`",
+    "",
+    "    $indentedCode$",
+    "",
+    "```text",
+    "$fencedCode$",
+    "```",
+    "",
+    "$ {E}_{1} = {E}_{x}$",
+  ].join("\n");
+  assert.deepEqual(
+    findSourceMarkdownMath(source).map(({ math }) => math),
+    ["x", " {E}_{1} = {E}_{x}"],
+  );
 });
 
 test("ships the Markdown-stage formula inspector", async () => {
@@ -238,6 +273,8 @@ test("ships the Markdown-stage formula inspector", async () => {
   ]);
 
   assert.match(editorSource, /annotatePostMarkdownMath/);
+  assert.match(editorSource, /annotateLostSourceMath/);
+  assert.match(editorSource, /markdownLostMathCandidatesRef/);
   assert.match(editorSource, /HTMLDomStrings/);
   assert.match(editorSource, /previewDebugPanel/);
   assert.match(editorSource, /tex2chtmlPromise/);
@@ -252,6 +289,8 @@ test("ships the Markdown-stage formula inspector", async () => {
   assert.match(editorSource, /MathJax input after Markdown/);
   assert.match(editorSource, /Differs from original Markdown/);
   assert.match(styles, /\.markdownMathCandidate/);
+  assert.match(styles, /\.markdownLostMathCandidate/);
+  assert.match(styles, /\.markdownLostMathExplanation/);
   assert.match(styles, /\.markdownMathTooltipOutput/);
   assert.match(styles, /\.markdownMathTooltipError/);
   assert.match(styles, /\.mathFormulaMismatch/);
@@ -341,6 +380,18 @@ $$`,
   );
   assert.match(html, /\$\\alpha \+ \\beta\$/);
   assert.match(html, /\$\$\n\\sum_i x_i\n\$\$/);
+});
+
+test("exposes formulas that Markdown turns into split DOM text", () => {
+  const broken = parseOpenReviewMarkdown("$ {E}_{1} = {E}_{x}$");
+  const escaped = parseOpenReviewMarkdown(
+    "${E}\\_{1} = {E}\\_{x}$",
+  );
+  assert.equal(
+    broken,
+    "<p>$ {E}<em>{1} = {E}</em>{x}$</p>\n",
+  );
+  assert.equal(escaped, "<p>${E}_{1} = {E}_{x}$</p>\n");
 });
 
 test("adds source anchors without changing rendered blocks", () => {

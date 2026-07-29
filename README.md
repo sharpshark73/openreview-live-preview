@@ -7,7 +7,7 @@ Write and Preview tabs.
 It includes:
 
 - OpenReview-compatible Markdown, sanitization, MathJax, and typography
-- Markdown-stage preview with post-Markdown formula inspection and source diffs
+- Markdown-stage preview with formula inspection, source diffs, and lost-formula detection
 - Real-time preview with click, cursor, and scroll synchronization
 - Bidirectional navigation between source and rendered blocks
 - CodeMirror 6 source editor with Markdown/LaTeX highlighting and find/replace

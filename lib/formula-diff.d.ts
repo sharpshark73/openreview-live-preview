@@ -20,3 +20,7 @@ export function pairFormulaInputs(
   rendered?: FormulaInput[],
   original?: FormulaInput[],
 ): Array<string | undefined>;
+export function matchFormulaInputs(
+  rendered?: FormulaInput[],
+  original?: FormulaInput[],
+): Array<number | undefined>;
