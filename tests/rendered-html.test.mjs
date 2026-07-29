@@ -7,6 +7,10 @@ import { lintOpenReviewMarkdown } from "../lib/markdown-warnings.mjs";
 import { findLiteralMatches } from "../lib/text-search.mjs";
 import { getPreferredLanguage } from "../lib/language-preference.mjs";
 import {
+  findPostMarkdownMath,
+  POST_MARKDOWN_BLOCK_BOUNDARY,
+} from "../lib/post-markdown-math.mjs";
+import {
   parseOpenReviewMarkdown,
   renderOpenReviewMarkdown,
   renderOpenReviewMarkdownWithAnchors,
@@ -58,6 +62,9 @@ test("server-renders the finished OpenReview tool", async () => {
   assert.match(html, /aria-label="Switch to English"/);
   assert.match(html, />English<\/button>/);
   assert.match(html, /aria-label="查找（Ctrl\/⌘\+F）"/);
+  assert.match(html, /aria-label="预览阶段"/);
+  assert.match(html, />最终<\/button>/);
+  assert.match(html, />Markdown<\/button>/);
   assert.match(html, /placeholder="查找"/);
   assert.match(html, /data-scope="preview"/);
   assert.match(html, /data-codemirror-editor/);
@@ -134,6 +141,56 @@ test("shows MathJax's parsed input alongside formula errors", async () => {
   assert.match(editorSource, /MathJax input/);
   assert.match(styles, /\.mathErrorTooltipFormula/);
   assert.match(styles, /user-select:\s*text/);
+});
+
+test("finds the formulas MathJax receives after Markdown rendering", () => {
+  const transformed =
+    "$\\widetilde{E}1=\\mathcal{E}{\\mathrm{mem}}$";
+  assert.deepEqual(
+    findPostMarkdownMath(transformed).map(({ math, display }) => ({
+      math,
+      display,
+    })),
+    [
+      {
+        math: "\\widetilde{E}1=\\mathcal{E}{\\mathrm{mem}}",
+        display: false,
+      },
+    ],
+  );
+
+  const mixed = findPostMarkdownMath(
+    "\\(a+b\\) and $$c=d$$ and \\[e=f\\]",
+  );
+  assert.deepEqual(
+    mixed.map(({ math, display }) => ({ math, display })),
+    [
+      { math: "a+b", display: false },
+      { math: "c=d", display: true },
+      { math: "e=f", display: true },
+    ],
+  );
+
+  assert.equal(
+    findPostMarkdownMath(
+      `$a${POST_MARKDOWN_BLOCK_BOUNDARY}b$`,
+    ).length,
+    0,
+  );
+  assert.equal(findPostMarkdownMath("\\$not math$").length, 0);
+});
+
+test("ships the Markdown-stage formula inspector", async () => {
+  const [editorSource, styles] = await Promise.all([
+    readFile(new URL("../app/editor.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(editorSource, /annotatePostMarkdownMath/);
+  assert.match(editorSource, /tex2chtmlPromise/);
+  assert.match(editorSource, /MathJax input after Markdown/);
+  assert.match(styles, /\.markdownMathCandidate/);
+  assert.match(styles, /\.markdownMathTooltipOutput/);
 });
 
 test("ships the AGPL license and first-visit unofficial notice", async () => {

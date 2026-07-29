@@ -17,6 +17,10 @@ import { lintAndFixMarkdown } from "../lib/markdown-lint-fix.mjs";
 import { findLiteralMatches } from "../lib/text-search.mjs";
 import { getPreferredLanguage } from "../lib/language-preference.mjs";
 import {
+  findPostMarkdownMath,
+  POST_MARKDOWN_BLOCK_BOUNDARY,
+} from "../lib/post-markdown-math.mjs";
+import {
   SourceEditor,
   type SourceDiagnostic,
   type SourceEditorHandle,
@@ -35,6 +39,7 @@ const LICENSE_URL = `${SOURCE_URL}/blob/main/LICENSE.md`;
 const DEFAULT_TEXT = "";
 
 type PreviewMode = "published" | "form";
+type PreviewStage = "final" | "markdown";
 type MathJaxState = "loading" | "ready" | "error";
 type SyncMode = "none" | "click" | "auto";
 type SearchScope = "source" | "preview";
@@ -66,6 +71,13 @@ const UI_TEXT = {
     resetConfirm: "清空当前草稿？",
     edit: "编辑",
     preview: "预览",
+    previewStage: "预览阶段",
+    finalPreview: "最终",
+    markdownPreview: "Markdown",
+    markdownMathInput: "Markdown 后的 MathJax 输入",
+    formulaPreview: "单公式预览",
+    renderingFormula: "正在渲染…",
+    mathJaxUnavailable: "MathJax 尚未就绪",
     find: "查找",
     findContent: "查找内容",
     caseSensitive: "区分大小写",
@@ -121,6 +133,13 @@ const UI_TEXT = {
     resetConfirm: "Clear the current draft?",
     edit: "Editor",
     preview: "Preview",
+    previewStage: "Preview stage",
+    finalPreview: "Final",
+    markdownPreview: "Markdown",
+    markdownMathInput: "MathJax input after Markdown",
+    formulaPreview: "Formula preview",
+    renderingFormula: "Rendering…",
+    mathJaxUnavailable: "MathJax is not ready",
     find: "Find",
     findContent: "Find text",
     caseSensitive: "Match case",
@@ -211,6 +230,14 @@ type MathJaxLike = {
     promise?: Promise<unknown>;
   };
   typesetPromise?: (elements?: Element[]) => Promise<unknown>;
+  tex2chtmlPromise?: (
+    math: string,
+    options?: Record<string, unknown>,
+  ) => Promise<Element>;
+  getMetricsFor?: (
+    element: Element,
+    display?: boolean,
+  ) => Record<string, unknown>;
 };
 
 declare global {
@@ -349,6 +376,165 @@ function getHighlightApi() {
     : null;
 }
 
+type RenderedTextSegment = {
+  node: Text;
+  start: number;
+  end: number;
+};
+
+type MarkdownMathCandidate = {
+  id: string;
+  start: number;
+  end: number;
+  contentStart: number;
+  contentEnd: number;
+  math: string;
+  display: boolean;
+  open: string;
+  close: string;
+};
+
+const BLOCK_ELEMENTS = new Set([
+  "ADDRESS",
+  "ARTICLE",
+  "ASIDE",
+  "BLOCKQUOTE",
+  "DIV",
+  "DL",
+  "FIELDSET",
+  "FIGCAPTION",
+  "FIGURE",
+  "FOOTER",
+  "FORM",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "HEADER",
+  "HR",
+  "LI",
+  "MAIN",
+  "NAV",
+  "OL",
+  "P",
+  "PRE",
+  "SECTION",
+  "TABLE",
+  "TD",
+  "TH",
+  "TR",
+  "UL",
+]);
+
+function collectPostMarkdownText(container: HTMLElement) {
+  const parts: string[] = [];
+  const segments: RenderedTextSegment[] = [];
+  let length = 0;
+
+  const appendBoundary = () => {
+    if (parts.at(-1) === POST_MARKDOWN_BLOCK_BOUNDARY) return;
+    parts.push(POST_MARKDOWN_BLOCK_BOUNDARY);
+    length += POST_MARKDOWN_BLOCK_BOUNDARY.length;
+  };
+
+  const visit = (node: Node) => {
+    if (node instanceof Text) {
+      const value = node.nodeValue ?? "";
+      if (!value) return;
+      segments.push({ node, start: length, end: length + value.length });
+      parts.push(value);
+      length += value.length;
+      return;
+    }
+
+    if (!(node instanceof HTMLElement)) return;
+    if (node.matches(".source-anchor, [hidden]")) {
+      return;
+    }
+    if (
+      node.matches(
+        "pre, code, script, style, textarea, annotation, annotation-xml, mjx-container",
+      )
+    ) {
+      appendBoundary();
+      return;
+    }
+
+    if (node.tagName === "BR") {
+      parts.push("\n");
+      length += 1;
+      return;
+    }
+
+    const isBlock = BLOCK_ELEMENTS.has(node.tagName);
+    if (isBlock) appendBoundary();
+    for (const child of node.childNodes) visit(child);
+    if (isBlock) appendBoundary();
+  };
+
+  for (const child of container.childNodes) visit(child);
+  return { value: parts.join(""), segments };
+}
+
+function annotatePostMarkdownMath(
+  container: HTMLElement,
+  inputLabel: string,
+) {
+  const { value, segments } = collectPostMarkdownText(container);
+  const candidates = findPostMarkdownMath(value).map((match, index) => ({
+    ...match,
+    id: `markdown-math-${index}`,
+  }));
+
+  for (const candidate of [...candidates].reverse()) {
+    const affectedSegments = segments
+      .filter(
+        (segment) =>
+          segment.start < candidate.end && segment.end > candidate.start,
+      )
+      .reverse();
+
+    for (const segment of affectedSegments) {
+      const localStart = Math.max(0, candidate.start - segment.start);
+      const localEnd = Math.min(
+        segment.end - segment.start,
+        candidate.end - segment.start,
+      );
+      if (localStart >= localEnd) continue;
+
+      const after = segment.node.splitText(localEnd);
+      const selected =
+        localStart === 0 ? segment.node : segment.node.splitText(localStart);
+      const marker = document.createElement("span");
+      marker.className = "markdownMathCandidate";
+      marker.dataset.markdownMathId = candidate.id;
+      marker.setAttribute("role", "button");
+      marker.tabIndex = 0;
+      marker.setAttribute(
+        "aria-label",
+        `${inputLabel}: ${candidate.math}`,
+      );
+      selected.parentNode?.insertBefore(marker, after);
+      marker.append(selected);
+    }
+  }
+
+  for (const candidate of candidates) {
+    const markers = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        `[data-markdown-math-id="${candidate.id}"]`,
+      ),
+    );
+    markers.forEach((marker, index) => {
+      marker.tabIndex = index === 0 ? 0 : -1;
+    });
+  }
+
+  return new Map(candidates.map((candidate) => [candidate.id, candidate]));
+}
+
 function annotateMathJaxErrors(
   container: HTMLElement,
   language: Language,
@@ -402,6 +588,8 @@ export default function Editor() {
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [sanitizationReady, setSanitizationReady] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>("published");
+  const [previewStage, setPreviewStage] =
+    useState<PreviewStage>("final");
   const [mathJaxState, setMathJaxState] =
     useState<MathJaxState>("loading");
   const [copied, setCopied] = useState(false);
@@ -416,17 +604,26 @@ export default function Editor() {
   const previewRef = useRef<HTMLDivElement>(null);
   const previewViewportRef = useRef<HTMLDivElement>(null);
   const mathErrorTooltipRef = useRef<HTMLDivElement>(null);
+  const markdownMathTooltipRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const moreMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const copyTimerRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
   const mathErrorHideTimerRef = useRef<number | null>(null);
+  const markdownMathHideTimerRef = useRef<number | null>(null);
+  const markdownMathRenderTimerRef = useRef<number | null>(null);
   const sourceScrollFrameRef = useRef<number | null>(null);
   const suppressSourceScrollRef = useRef(false);
   const suppressSourceScrollTimerRef = useRef<number | null>(null);
   const typesetQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const mathErrorTargetRef = useRef<HTMLElement | null>(null);
+  const markdownMathTargetIdRef = useRef<string | null>(null);
+  const markdownMathRequestRef = useRef(0);
+  const markdownMathCandidatesRef = useRef<
+    Map<string, MarkdownMathCandidate>
+  >(new Map());
+  const markdownMathCacheRef = useRef<Map<string, Element>>(new Map());
   const lintUndoRef = useRef<string | null>(null);
   const findBarRef = useRef<HTMLElement>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
@@ -544,6 +741,7 @@ export default function Editor() {
     const mathJax = window.MathJax;
     const container = previewRef.current;
     if (
+      previewStage !== "final" ||
       mathJaxState !== "ready" ||
       !mathJax?.typesetPromise ||
       !container
@@ -578,14 +776,41 @@ export default function Editor() {
     return () => {
       cancelled = true;
     };
-  }, [sanitizedHtml, mathJaxState, previewMode, language]);
+  }, [
+    sanitizedHtml,
+    mathJaxState,
+    previewMode,
+    previewStage,
+    language,
+  ]);
+
+  useEffect(() => {
+    markdownMathCandidatesRef.current.clear();
+    markdownMathTargetIdRef.current = null;
+    markdownMathRequestRef.current += 1;
+    if (markdownMathTooltipRef.current) {
+      markdownMathTooltipRef.current.hidden = true;
+    }
+    if (previewStage !== "markdown") return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const container = previewRef.current;
+      if (!container) return;
+      markdownMathCandidatesRef.current = annotatePostMarkdownMath(
+        container,
+        ui.markdownMathInput,
+      );
+      previewSearchRefreshRef.current?.();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sanitizedHtml, previewMode, previewStage, ui.markdownMathInput]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       previewSearchRefreshRef.current?.();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [sanitizedHtml, previewMode]);
+  }, [sanitizedHtml, previewMode, previewStage]);
 
   useEffect(() => {
     const highlightStyle = document.createElement("style");
@@ -654,6 +879,12 @@ export default function Editor() {
       }
       if (mathErrorHideTimerRef.current) {
         window.clearTimeout(mathErrorHideTimerRef.current);
+      }
+      if (markdownMathHideTimerRef.current) {
+        window.clearTimeout(markdownMathHideTimerRef.current);
+      }
+      if (markdownMathRenderTimerRef.current) {
+        window.clearTimeout(markdownMathRenderTimerRef.current);
       }
       if (sourceScrollFrameRef.current) {
         window.cancelAnimationFrame(sourceScrollFrameRef.current);
@@ -1252,6 +1483,195 @@ export default function Editor() {
     }
   };
 
+  const getMarkdownMathTarget = (target: EventTarget | null) =>
+    target instanceof HTMLElement
+      ? target.closest<HTMLElement>("[data-markdown-math-id]")
+      : null;
+
+  const clearMarkdownMathTarget = () => {
+    previewRef.current
+      ?.querySelectorAll(".markdownMathCandidateActive")
+      .forEach((element) =>
+        element.classList.remove("markdownMathCandidateActive"),
+      );
+    markdownMathTargetIdRef.current = null;
+  };
+
+  const hideMarkdownMathTooltip = () => {
+    if (markdownMathHideTimerRef.current !== null) {
+      window.clearTimeout(markdownMathHideTimerRef.current);
+      markdownMathHideTimerRef.current = null;
+    }
+    if (markdownMathRenderTimerRef.current !== null) {
+      window.clearTimeout(markdownMathRenderTimerRef.current);
+      markdownMathRenderTimerRef.current = null;
+    }
+    markdownMathRequestRef.current += 1;
+    clearMarkdownMathTarget();
+    if (markdownMathTooltipRef.current) {
+      markdownMathTooltipRef.current.hidden = true;
+    }
+  };
+
+  const scheduleMarkdownMathTooltipHide = () => {
+    if (markdownMathHideTimerRef.current !== null) return;
+    markdownMathHideTimerRef.current = window.setTimeout(() => {
+      markdownMathHideTimerRef.current = null;
+      hideMarkdownMathTooltip();
+    }, 140);
+  };
+
+  const cancelMarkdownMathTooltipHide = () => {
+    if (markdownMathHideTimerRef.current === null) return;
+    window.clearTimeout(markdownMathHideTimerRef.current);
+    markdownMathHideTimerRef.current = null;
+  };
+
+  const positionMarkdownMathTooltip = (
+    target: HTMLElement,
+    tooltip: HTMLElement,
+  ) => {
+    const rect = target.getBoundingClientRect();
+    tooltip.style.left = "12px";
+    tooltip.style.top = "12px";
+    tooltip.hidden = false;
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const placeAbove =
+      tooltipRect.height > spaceBelow && rect.top > spaceBelow;
+    const left = Math.min(
+      Math.max(12, rect.left),
+      Math.max(12, window.innerWidth - tooltipRect.width - 12),
+    );
+    const top = placeAbove
+      ? Math.max(12, rect.top - tooltipRect.height - 10)
+      : Math.min(
+          Math.max(12, rect.bottom + 10),
+          Math.max(12, window.innerHeight - tooltipRect.height - 12),
+        );
+    tooltip.classList.toggle("above", placeAbove);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  };
+
+  const renderMarkdownMathCandidate = (
+    candidate: MarkdownMathCandidate,
+    target: HTMLElement,
+    output: HTMLElement,
+  ) => {
+    const requestId = ++markdownMathRequestRef.current;
+    const cacheKey = `${candidate.display ? "display" : "inline"}:${candidate.math}`;
+    const cached = markdownMathCacheRef.current.get(cacheKey);
+    if (cached) {
+      output.replaceChildren(cached.cloneNode(true));
+      const tooltip = markdownMathTooltipRef.current;
+      if (tooltip) positionMarkdownMathTooltip(target, tooltip);
+      return;
+    }
+
+    const mathJax = window.MathJax;
+    if (
+      mathJaxState !== "ready" ||
+      !mathJax?.tex2chtmlPromise
+    ) {
+      output.textContent = ui.mathJaxUnavailable;
+      return;
+    }
+
+    const metrics = mathJax.getMetricsFor?.(target, candidate.display) ?? {};
+    typesetQueueRef.current = typesetQueueRef.current
+      .catch(() => undefined)
+      .then(() =>
+        mathJax.tex2chtmlPromise?.(candidate.math, {
+          ...metrics,
+          display: candidate.display,
+        }),
+      )
+      .then((rendered) => {
+        if (
+          !rendered ||
+          requestId !== markdownMathRequestRef.current ||
+          markdownMathTargetIdRef.current !== candidate.id
+        ) {
+          return;
+        }
+        markdownMathCacheRef.current.set(cacheKey, rendered.cloneNode(true) as Element);
+        output.replaceChildren(rendered);
+        const tooltip = markdownMathTooltipRef.current;
+        if (tooltip) positionMarkdownMathTooltip(target, tooltip);
+      })
+      .catch(() => {
+        if (requestId === markdownMathRequestRef.current) {
+          output.textContent = ui.mathJaxUnavailable;
+        }
+      });
+  };
+
+  const showMarkdownMathTooltip = (target: EventTarget | null) => {
+    const marker = getMarkdownMathTarget(target);
+    const id = marker?.dataset.markdownMathId;
+    const candidate = id
+      ? markdownMathCandidatesRef.current.get(id)
+      : undefined;
+    if (!marker || !id || !candidate) {
+      scheduleMarkdownMathTooltipHide();
+      return;
+    }
+    if (id === markdownMathTargetIdRef.current) {
+      cancelMarkdownMathTooltipHide();
+      return;
+    }
+
+    cancelMarkdownMathTooltipHide();
+    clearMarkdownMathTarget();
+    markdownMathTargetIdRef.current = id;
+    previewRef.current
+      ?.querySelectorAll<HTMLElement>("[data-markdown-math-id]")
+      .forEach((element) => {
+        if (element.dataset.markdownMathId === id) {
+          element.classList.add("markdownMathCandidateActive");
+        }
+      });
+
+    const tooltip = markdownMathTooltipRef.current;
+    if (!tooltip) return;
+    const header = document.createElement("div");
+    header.className = "markdownMathTooltipHeader";
+    header.textContent = ui.formulaPreview;
+    const content = document.createElement("div");
+    content.className = "markdownMathTooltipContent";
+    const inputLabel = document.createElement("div");
+    inputLabel.className = "markdownMathTooltipLabel";
+    inputLabel.textContent = ui.markdownMathInput;
+    const input = document.createElement("code");
+    input.className = "markdownMathTooltipFormula";
+    input.textContent = candidate.math;
+    const output = document.createElement("div");
+    output.className = "markdownMathTooltipOutput";
+    output.textContent = ui.renderingFormula;
+    content.append(inputLabel, input, output);
+    tooltip.replaceChildren(header, content);
+    tooltip.className = "markdownMathTooltip";
+    positionMarkdownMathTooltip(marker, tooltip);
+
+    if (markdownMathRenderTimerRef.current !== null) {
+      window.clearTimeout(markdownMathRenderTimerRef.current);
+    }
+    markdownMathRenderTimerRef.current = window.setTimeout(() => {
+      markdownMathRenderTimerRef.current = null;
+      renderMarkdownMathCandidate(candidate, marker, output);
+    }, 160);
+  };
+
+  const handleMarkdownMathPointerMove = (target: EventTarget | null) => {
+    const marker = getMarkdownMathTarget(target);
+    if (marker) {
+      showMarkdownMathTooltip(marker);
+    } else {
+      scheduleMarkdownMathTooltipHide();
+    }
+  };
+
   const acceptNotice = () => {
     window.localStorage.setItem(NOTICE_KEY, "accepted");
     setNoticeOpen(false);
@@ -1556,7 +1976,30 @@ export default function Editor() {
 
           <article className="pane previewPane">
             <header className="paneHeader">
-              <strong>{ui.preview}</strong>
+              <div className="paneTitleGroup">
+                <strong>{ui.preview}</strong>
+                <div
+                  className="previewStageSwitch"
+                  aria-label={ui.previewStage}
+                >
+                  <button
+                    className={previewStage === "final" ? "active" : ""}
+                    type="button"
+                    aria-pressed={previewStage === "final"}
+                    onClick={() => setPreviewStage("final")}
+                  >
+                    {ui.finalPreview}
+                  </button>
+                  <button
+                    className={previewStage === "markdown" ? "active" : ""}
+                    type="button"
+                    aria-pressed={previewStage === "markdown"}
+                    onClick={() => setPreviewStage("markdown")}
+                  >
+                    {ui.markdownPreview}
+                  </button>
+                </div>
+              </div>
               <button
                 className="paneFindButton"
                 type="button"
@@ -1573,13 +2016,38 @@ export default function Editor() {
               onPointerDown={() => {
                 searchScopeRef.current = "preview";
               }}
-              onScroll={hideMathErrorTooltip}
-              onPointerMove={(event) =>
-                handleMathErrorPointerMove(event.target)
-              }
-              onPointerLeave={scheduleMathErrorTooltipHide}
-              onFocus={(event) => showMathErrorTooltip(event.target)}
-              onBlur={scheduleMathErrorTooltipHide}
+              onScroll={() => {
+                hideMathErrorTooltip();
+                hideMarkdownMathTooltip();
+              }}
+              onPointerMove={(event) => {
+                if (previewStage === "markdown") {
+                  handleMarkdownMathPointerMove(event.target);
+                } else {
+                  handleMathErrorPointerMove(event.target);
+                }
+              }}
+              onPointerLeave={() => {
+                if (previewStage === "markdown") {
+                  scheduleMarkdownMathTooltipHide();
+                } else {
+                  scheduleMathErrorTooltipHide();
+                }
+              }}
+              onFocus={(event) => {
+                if (previewStage === "markdown") {
+                  showMarkdownMathTooltip(event.target);
+                } else {
+                  showMathErrorTooltip(event.target);
+                }
+              }}
+              onBlur={() => {
+                if (previewStage === "markdown") {
+                  scheduleMarkdownMathTooltipHide();
+                } else {
+                  scheduleMathErrorTooltipHide();
+                }
+              }}
             >
               <div
                 className={`openreviewFrame ${
@@ -1592,8 +2060,13 @@ export default function Editor() {
                       Preview:
                     </strong>{" "}
                     <div
+                      key={`published-${previewStage}-${language}`}
                       ref={previewRef}
-                      className="note-content-value markdown-rendered"
+                      className={`note-content-value markdown-rendered ${
+                        previewStage === "markdown"
+                          ? "markdownStagePreview"
+                          : ""
+                      }`}
                       data-rendered-html
                       onDoubleClick={handlePreviewDoubleClick}
                       dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
@@ -1601,8 +2074,13 @@ export default function Editor() {
                   </div>
                 ) : (
                   <div
+                    key={`form-${previewStage}-${language}`}
                     ref={previewRef}
-                    className="form-preview markdown-rendered"
+                    className={`form-preview markdown-rendered ${
+                      previewStage === "markdown"
+                        ? "markdownStagePreview"
+                        : ""
+                    }`}
                     data-rendered-html
                     onDoubleClick={handlePreviewDoubleClick}
                     dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
@@ -1618,6 +2096,14 @@ export default function Editor() {
         role="tooltip"
         onPointerEnter={cancelMathErrorTooltipHide}
         onPointerLeave={hideMathErrorTooltip}
+        hidden
+      />
+      <div
+        ref={markdownMathTooltipRef}
+        className="markdownMathTooltip"
+        role="tooltip"
+        onPointerEnter={cancelMarkdownMathTooltipHide}
+        onPointerLeave={hideMarkdownMathTooltip}
         hidden
       />
       {noticeOpen ? (

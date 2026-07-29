@@ -352,6 +352,44 @@ a:focus {
   font-weight: 700;
 }
 
+.paneTitleGroup {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.previewStageSwitch {
+  display: inline-flex;
+  align-items: center;
+}
+
+.previewStageSwitch button {
+  min-height: 24px;
+  padding: 2px 7px;
+  color: #667176;
+  background: #fff;
+  border: 1px solid #cbc7c0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.previewStageSwitch button + button {
+  margin-left: -1px;
+}
+
+.previewStageSwitch button:hover,
+.previewStageSwitch button:focus-visible,
+.previewStageSwitch button.active {
+  position: relative;
+  z-index: 1;
+  color: #fff;
+  background: var(--or-blue-dark);
+  border-color: var(--or-blue-dark);
+  outline: 0;
+}
+
 .paneHeaderActions {
   display: flex;
   align-items: center;
@@ -1035,6 +1073,24 @@ a:focus {
   outline: 2px solid var(--or-red);
 }
 
+.markdownStagePreview .markdownMathCandidate {
+  padding: 0 1px;
+  color: inherit;
+  background: rgba(87, 131, 151, 0.17);
+  border-bottom: 1px dashed rgba(63, 105, 120, 0.82);
+  cursor: help;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.markdownStagePreview .markdownMathCandidate:hover,
+.markdownStagePreview .markdownMathCandidate:focus-visible,
+.markdownStagePreview .markdownMathCandidateActive {
+  background: rgba(87, 131, 151, 0.32);
+  outline: 2px solid rgba(63, 105, 120, 0.36);
+  outline-offset: 1px;
+}
+
 .mathErrorTooltip {
   position: fixed;
   z-index: 100;
@@ -1050,6 +1106,81 @@ a:focus {
   font-size: 0.75rem;
   line-height: 1.45;
   overscroll-behavior: contain;
+}
+
+.markdownMathTooltip {
+  position: fixed;
+  z-index: 100;
+  width: min(520px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  color: #222;
+  background: #fff;
+  border: 1px solid #c9cdd1;
+  border-top: 3px solid var(--or-blue-dark);
+  border-radius: 3px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.2);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overscroll-behavior: contain;
+}
+
+.markdownMathTooltipHeader {
+  padding: 7px 10px 6px;
+  color: var(--or-blue-dark);
+  border-bottom: 1px solid #e3e5e7;
+  font-weight: 700;
+}
+
+.markdownMathTooltipContent {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px 10px;
+}
+
+.markdownMathTooltipLabel {
+  color: #6a7076;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.markdownMathTooltipFormula {
+  display: block;
+  max-height: 8rem;
+  padding: 7px 8px;
+  overflow: auto;
+  color: #202428;
+  background: #f4f5f6;
+  border: 1px solid #e0e2e4;
+  border-radius: 2px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.markdownMathTooltipOutput {
+  min-height: 44px;
+  padding: 9px 8px;
+  overflow-x: auto;
+  color: #59636a;
+  background: #fff;
+  border: 1px solid #e0e2e4;
+  border-radius: 2px;
+}
+
+.markdownMathTooltipOutput mjx-container {
+  color: #222;
+}
+
+.markdownMathTooltipOutput mjx-container[display="true"] {
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .mathErrorTooltipHeader {
