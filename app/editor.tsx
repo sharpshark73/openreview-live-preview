@@ -420,40 +420,6 @@ type MarkdownMathCandidate = {
   close: string;
 };
 
-const BLOCK_ELEMENTS = new Set([
-  "ADDRESS",
-  "ARTICLE",
-  "ASIDE",
-  "BLOCKQUOTE",
-  "DIV",
-  "DL",
-  "FIELDSET",
-  "FIGCAPTION",
-  "FIGURE",
-  "FOOTER",
-  "FORM",
-  "H1",
-  "H2",
-  "H3",
-  "H4",
-  "H5",
-  "H6",
-  "HEADER",
-  "HR",
-  "LI",
-  "MAIN",
-  "NAV",
-  "OL",
-  "P",
-  "PRE",
-  "SECTION",
-  "TABLE",
-  "TD",
-  "TH",
-  "TR",
-  "UL",
-]);
-
 function collectPostMarkdownText(container: HTMLElement) {
   const parts: string[] = [];
   const segments: RenderedTextSegment[] = [];
@@ -476,9 +442,6 @@ function collectPostMarkdownText(container: HTMLElement) {
     }
 
     if (!(node instanceof HTMLElement)) return;
-    if (node.matches(".source-anchor, [hidden]")) {
-      return;
-    }
     if (
       node.matches(
         "pre, code, script, style, textarea, annotation, annotation-xml, mjx-container",
@@ -494,10 +457,13 @@ function collectPostMarkdownText(container: HTMLElement) {
       return;
     }
 
-    const isBlock = BLOCK_ELEMENTS.has(node.tagName);
-    if (isBlock) appendBoundary();
+    if (node.tagName === "WBR") return;
+
+    // MathJax's HTMLDomStrings calls pushString() before traversing every
+    // ordinary element, including inline containers such as EM and STRONG.
+    appendBoundary();
     for (const child of node.childNodes) visit(child);
-    if (isBlock) appendBoundary();
+    if (node.childNodes.length > 0) appendBoundary();
   };
 
   for (const child of container.childNodes) visit(child);

@@ -187,6 +187,16 @@ test("finds the formulas MathJax receives after Markdown rendering", () => {
     ).length,
     0,
   );
+  const markdownSplitFormula = [
+    "$ {E}",
+    "{1} = {E}",
+    "{x}$",
+  ].join(POST_MARKDOWN_BLOCK_BOUNDARY);
+  assert.equal(findPostMarkdownMath(markdownSplitFormula).length, 0);
+  assert.equal(
+    findPostMarkdownMath("$ {E}_{1} = {E}_{x}$").length,
+    1,
+  );
   assert.equal(findPostMarkdownMath("\\$not math$").length, 0);
 });
 
@@ -228,6 +238,7 @@ test("ships the Markdown-stage formula inspector", async () => {
   ]);
 
   assert.match(editorSource, /annotatePostMarkdownMath/);
+  assert.match(editorSource, /HTMLDomStrings/);
   assert.match(editorSource, /previewDebugPanel/);
   assert.match(editorSource, /tex2chtmlPromise/);
   assert.match(editorSource, /getMathJaxErrorMessages/);
