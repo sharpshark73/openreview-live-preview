@@ -337,10 +337,6 @@ a:focus {
   display: none;
 }
 
-.findBar[data-scope="source"] {
-  left: 12px;
-}
-
 .findBar[data-scope="preview"] {
   right: 12px;
 }
@@ -350,14 +346,6 @@ a:focus {
   min-width: 0;
   align-items: center;
   gap: 5px;
-}
-
-.findRow + .findRow {
-  margin-top: 6px;
-}
-
-.findReplaceRow[data-visible="false"] {
-  display: none;
 }
 
 .findScope {
@@ -533,49 +521,127 @@ a:focus {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  resize: none;
-  padding: 20px 22px 32px;
+  overflow: hidden;
+  padding: 0;
   color: #26292c;
   background: var(--or-input);
   border: 0;
   border-radius: 0;
   outline: 0;
+}
+
+.sourceCodeMirror > .cm-editor {
+  height: 100%;
+}
+
+.sourceCodeMirror .cm-panel.cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px;
+  font-size: 0.66rem;
+}
+
+.sourceCodeMirror .cm-panel.cm-search br {
+  display: none;
+}
+
+.sourceCodeMirror .cm-panel.cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.sourceCodeMirror .cm-panel.cm-search input[type="text"] {
+  min-width: 110px;
+  height: 27px;
+  padding: 3px 6px;
+  color: #2f3439;
+  background: #fff;
+  border: 1px solid #bbb7b0;
+  border-radius: 0;
+  outline: 0;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.82rem;
-  line-height: 1.7;
-  tab-size: 2;
+  font-size: 0.68rem;
 }
 
-.sourceEditor:focus {
-  box-shadow: inset 2px 0 var(--or-blue);
+.sourceCodeMirror .cm-panel.cm-search input[type="text"]:focus {
+  border-color: var(--or-blue-dark);
+  box-shadow: 0 0 0 1px var(--or-blue-dark);
 }
 
-.sourceSyncFlash {
-  position: absolute;
-  z-index: 2;
-  right: 18px;
-  left: 20px;
-  height: 1.65rem;
-  pointer-events: none;
-  opacity: 0;
+.sourceCodeMirror .cm-panel.cm-search button {
+  min-height: 27px;
+  padding: 3px 7px;
+  color: #4d5b61;
+  background: #fff;
+  border: 1px solid #bbb7b0;
+  border-radius: 0;
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.sourceCodeMirror .cm-panel.cm-search button:hover,
+.sourceCodeMirror .cm-panel.cm-search button:focus-visible {
+  color: #fff;
+  background: var(--or-blue-dark);
+  border-color: var(--or-blue-dark);
+  outline: 0;
+}
+
+.sourceCodeMirror .cm-panel.cm-search button[name="close"] {
+  margin-left: auto;
+}
+
+.sourceCodeMirror .cm-openreviewMath {
+  color: #243f71;
+  background: rgba(64, 104, 174, 0.055);
+}
+
+.sourceCodeMirror .cm-openreviewMathDelimiter {
+  color: #8c1b13;
+  font-weight: 700;
+}
+
+.sourceCodeMirror .cm-openreviewTexCommand {
+  color: #7651a6;
+  font-weight: 600;
+}
+
+.sourceCodeMirror .cm-openreviewTexBrace {
+  color: #a35716;
+}
+
+.sourceCodeMirror .cm-sourceSyncFlashLine {
+  animation: source-sync-highlight 720ms ease-out;
+}
+
+.sourceCodeMirror .cm-sourceSyncFlashRange {
+  border-radius: 2px;
+  animation: source-sync-range-highlight 720ms ease-out;
 }
 
 @keyframes source-sync-highlight {
   0% {
-    background-color: rgba(238, 138, 131, 0.34);
-    box-shadow: 0 0 0 3px rgba(140, 27, 19, 0.1);
-    opacity: 1;
+    background-color: rgba(238, 138, 131, 0.3);
+    box-shadow: inset 3px 0 rgba(140, 27, 19, 0.28);
   }
 
   100% {
     background-color: transparent;
-    box-shadow: 0 0 0 0 rgba(140, 27, 19, 0);
-    opacity: 0;
+    box-shadow: inset 0 0 rgba(140, 27, 19, 0);
   }
 }
 
-.sourceSyncFlash.active {
-  animation: source-sync-highlight 720ms ease-out;
+@keyframes source-sync-range-highlight {
+  0% {
+    background-color: rgba(238, 138, 131, 0.42);
+  }
+
+  100% {
+    background-color: transparent;
+  }
 }
 
 .previewViewport {
@@ -918,7 +984,6 @@ a:focus {
   }
 
   .findBar,
-  .findBar[data-scope="source"],
   .findBar[data-scope="preview"] {
     top: 104px;
     right: 8px;
@@ -974,8 +1039,9 @@ a:focus {
     background-color: rgba(238, 138, 131, 0.25);
   }
 
-  .sourceSyncFlash.active {
+  .sourceCodeMirror .cm-sourceSyncFlashLine,
+  .sourceCodeMirror .cm-sourceSyncFlashRange {
+    animation: none !important;
     background-color: rgba(238, 138, 131, 0.25);
-    opacity: 1;
   }
 }

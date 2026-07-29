@@ -53,10 +53,11 @@ test("server-renders the finished OpenReview tool", async () => {
   assert.match(html, />Lint<\/button>/);
   assert.match(html, /aria-label="Switch to English"/);
   assert.match(html, />EN<\/button>/);
-  assert.match(html, /aria-label="查找与替换"/);
+  assert.match(html, /aria-label="查找（Ctrl\/⌘\+F）"/);
   assert.match(html, /placeholder="查找"/);
-  assert.match(html, /placeholder="替换为"/);
-  assert.match(html, /data-scope="source"/);
+  assert.match(html, /data-scope="preview"/);
+  assert.match(html, /data-codemirror-editor/);
+  assert.doesNotMatch(html, /<textarea[^>]+OpenReview Markdown source/);
   assert.match(html, />Preview:<\/strong>/);
   assert.doesNotMatch(html, /id="field-label"/);
   assert.doesNotMatch(html, /已保存|实时同步|正在排版公式/);
@@ -87,6 +88,24 @@ test("uses the OpenReview package versions and official Markdown linter", async 
   assert.equal(JSON.parse(markedPackage).version, "15.0.6");
   assert.equal(JSON.parse(purifierPackage).version, "2.21.0");
   assert.equal(JSON.parse(markdownlintPackage).version, "0.40.0");
+});
+
+test("uses CodeMirror 6 for Markdown editing, search, lint, and source sync", async () => {
+  const [packageSource, editorSource] = await Promise.all([
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../app/source-editor.tsx", import.meta.url), "utf8"),
+  ]);
+  const dependencies = JSON.parse(packageSource).dependencies;
+
+  assert.equal(dependencies.codemirror, "^6.0.2");
+  assert.ok(dependencies["@codemirror/lang-markdown"]);
+  assert.ok(dependencies["@codemirror/search"]);
+  assert.ok(dependencies["@codemirror/lint"]);
+  assert.match(editorSource, /markdownLanguage/);
+  assert.match(editorSource, /openSearchPanel/);
+  assert.match(editorSource, /setDiagnostics/);
+  assert.match(editorSource, /getViewportCenter/);
+  assert.match(editorSource, /cm-openreviewMath/);
 });
 
 test("shows MathJax's parsed input alongside formula errors", async () => {

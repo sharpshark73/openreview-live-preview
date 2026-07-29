@@ -12,15 +12,14 @@ import {
   parseOpenReviewMarkdown,
   renderOpenReviewMarkdownWithAnchors,
 } from "../lib/openreview-renderer.mjs";
-import {
-  lintOpenReviewMarkdown,
-  type MarkdownWarning,
-} from "../lib/markdown-warnings.mjs";
+import { lintOpenReviewMarkdown } from "../lib/markdown-warnings.mjs";
 import { lintAndFixMarkdown } from "../lib/markdown-lint-fix.mjs";
+import { findLiteralMatches } from "../lib/text-search.mjs";
 import {
-  findLiteralMatches,
-  type TextMatch,
-} from "../lib/text-search.mjs";
+  SourceEditor,
+  type SourceDiagnostic,
+  type SourceEditorHandle,
+} from "./source-editor";
 
 const STORAGE_KEY = "openreview-live-renderer:draft:v1";
 const SYNC_MODE_KEY = "openreview-live-renderer:sync-mode:v1";
@@ -39,6 +38,12 @@ type MathJaxState = "loading" | "ready" | "error";
 type SyncMode = "none" | "click" | "auto";
 type SearchScope = "source" | "preview";
 type Language = "zh" | "en";
+type MarkdownWarning = {
+  code: string;
+  end: number;
+  message: string;
+  start: number;
+};
 
 const UI_TEXT = {
   zh: {
@@ -58,7 +63,6 @@ const UI_TEXT = {
     copy: "复制",
     copied: "已复制",
     resetConfirm: "清空当前草稿？",
-    findAndReplace: "查找与替换",
     edit: "编辑",
     preview: "预览",
     find: "查找",
@@ -70,9 +74,6 @@ const UI_TEXT = {
     nextTitle: "下一个（Enter）",
     closeFind: "关闭查找",
     closeFindTitle: "关闭（Esc）",
-    replace: "替换",
-    replaceWith: "替换为",
-    replaceAll: "全部",
     unsupported: "不支持",
     markdownWarning: "Markdown 警告",
     warningCount: (count: number) => `${count} 条 Markdown 警告`,
@@ -116,7 +117,6 @@ const UI_TEXT = {
     copy: "Copy",
     copied: "Copied",
     resetConfirm: "Clear the current draft?",
-    findAndReplace: "Find and replace",
     edit: "Editor",
     preview: "Preview",
     find: "Find",
@@ -128,9 +128,6 @@ const UI_TEXT = {
     nextTitle: "Next (Enter)",
     closeFind: "Close find",
     closeFindTitle: "Close (Esc)",
-    replace: "Replace",
-    replaceWith: "Replace with",
-    replaceAll: "All",
     unsupported: "Unsupported",
     markdownWarning: "Markdown warning",
     warningCount: (count: number) =>
@@ -325,64 +322,6 @@ function downloadText(text: string) {
   URL.revokeObjectURL(url);
 }
 
-function getCaretViewportY(
-  textarea: HTMLTextAreaElement,
-  sourceOffset: number,
-  clampToViewport = true,
-) {
-  const computed = window.getComputedStyle(textarea);
-  const mirror = document.createElement("div");
-  const mirroredProperties = [
-    "box-sizing",
-    "padding-top",
-    "padding-right",
-    "padding-bottom",
-    "padding-left",
-    "border-top-width",
-    "border-right-width",
-    "border-bottom-width",
-    "border-left-width",
-    "font-family",
-    "font-size",
-    "font-style",
-    "font-weight",
-    "font-variant",
-    "letter-spacing",
-    "line-height",
-    "tab-size",
-    "text-align",
-    "text-indent",
-    "text-transform",
-    "word-spacing",
-    "overflow-wrap",
-  ];
-
-  for (const property of mirroredProperties) {
-    mirror.style.setProperty(property, computed.getPropertyValue(property));
-  }
-
-  mirror.style.position = "fixed";
-  mirror.style.top = "0";
-  mirror.style.left = "-10000px";
-  mirror.style.width = `${textarea.clientWidth}px`;
-  mirror.style.height = "auto";
-  mirror.style.overflow = "hidden";
-  mirror.style.visibility = "hidden";
-  mirror.style.whiteSpace = "pre-wrap";
-  mirror.style.wordBreak = "normal";
-
-  mirror.append(document.createTextNode(textarea.value.slice(0, sourceOffset)));
-  const caretMarker = document.createElement("span");
-  caretMarker.textContent = "\u200b";
-  mirror.append(caretMarker);
-  document.body.append(mirror);
-
-  const caretY = caretMarker.offsetTop - textarea.scrollTop;
-  mirror.remove();
-  if (!clampToViewport) return caretY;
-  return Math.min(textarea.clientHeight, Math.max(0, caretY));
-}
-
 function getSourceLocation(value: string, offset: number) {
   const before = value.slice(0, offset);
   const lastLineBreak = before.lastIndexOf("\n");
@@ -469,7 +408,7 @@ export default function Editor() {
   const [noticeOpen, setNoticeOpen] = useState(false);
   const ui = UI_TEXT[language];
 
-  const sourceEditorRef = useRef<HTMLTextAreaElement>(null);
+  const sourceEditorRef = useRef<SourceEditorHandle>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const previewViewportRef = useRef<HTMLDivElement>(null);
   const mathErrorTooltipRef = useRef<HTMLDivElement>(null);
@@ -477,30 +416,21 @@ export default function Editor() {
   const copyTimerRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
   const mathErrorHideTimerRef = useRef<number | null>(null);
-  const sourceHighlightRef = useRef<HTMLDivElement>(null);
-  const sourceHighlightTimerRef = useRef<number | null>(null);
   const sourceScrollFrameRef = useRef<number | null>(null);
   const suppressSourceScrollRef = useRef(false);
   const suppressSourceScrollTimerRef = useRef<number | null>(null);
   const typesetQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const mathErrorTargetRef = useRef<HTMLElement | null>(null);
   const lintUndoRef = useRef<string | null>(null);
-  const textRef = useRef(text);
   const findBarRef = useRef<HTMLElement>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
-  const replaceInputRef = useRef<HTMLInputElement>(null);
   const findScopeLabelRef = useRef<HTMLSpanElement>(null);
   const findCountRef = useRef<HTMLSpanElement>(null);
-  const findReplaceRowRef = useRef<HTMLDivElement>(null);
   const findCaseSensitiveRef = useRef<HTMLInputElement>(null);
   const searchScopeRef = useRef<SearchScope>("source");
-  const sourceMatchesRef = useRef<TextMatch[]>([]);
   const previewRangesRef = useRef<Range[]>([]);
   const searchMatchIndexRef = useRef(-1);
   const previewSearchRefreshRef = useRef<(() => void) | null>(null);
-  const sourceSearchRefreshRef = useRef<
-    ((value: string) => void) | null
-  >(null);
   const openSearchRef = useRef<
     ((scope: SearchScope, selectReplacement?: boolean) => void) | null
   >(null);
@@ -516,6 +446,18 @@ export default function Editor() {
   const markdownWarnings = useMemo(
     () => lintOpenReviewMarkdown(text),
     [text],
+  );
+  const sourceDiagnostics = useMemo<SourceDiagnostic[]>(
+    () =>
+      markdownWarnings.map((warning) => ({
+        from: warning.start,
+        to: warning.end,
+        message:
+          language === "en"
+            ? ENGLISH_WARNING_MESSAGES[warning.code] ?? warning.message
+            : warning.message,
+      })),
+    [language, markdownWarnings],
   );
 
   useEffect(() => {
@@ -548,19 +490,6 @@ export default function Editor() {
     if (!draftLoaded) return;
     window.localStorage.setItem(STORAGE_KEY, text);
   }, [draftLoaded, text]);
-
-  useEffect(() => {
-    textRef.current = text;
-    const frame = window.requestAnimationFrame(() => {
-      if (
-        findBarRef.current?.dataset.open === "true" &&
-        searchScopeRef.current === "source"
-      ) {
-        sourceSearchRefreshRef.current?.(text);
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [text]);
 
   useEffect(() => {
     if (!draftLoaded) return;
@@ -650,7 +579,8 @@ export default function Editor() {
           scope = "preview";
         } else if (
           target instanceof Node &&
-          sourceEditorRef.current?.contains(target)
+          target instanceof Element &&
+          target.closest("[data-codemirror-editor]")
         ) {
           scope = "source";
         }
@@ -688,9 +618,6 @@ export default function Editor() {
       }
       if (mathErrorHideTimerRef.current) {
         window.clearTimeout(mathErrorHideTimerRef.current);
-      }
-      if (sourceHighlightTimerRef.current) {
-        window.clearTimeout(sourceHighlightTimerRef.current);
       }
       if (sourceScrollFrameRef.current) {
         window.cancelAnimationFrame(sourceScrollFrameRef.current);
@@ -740,22 +667,6 @@ export default function Editor() {
     }
     highlightTimerRef.current = window.setTimeout(() => {
       targetElement.classList.remove("syncHighlight");
-    }, 720);
-  };
-
-  const flashSourcePosition = (viewportY: number) => {
-    const highlight = sourceHighlightRef.current;
-    if (!highlight) return;
-
-    highlight.style.top = `${Math.max(0, viewportY - 2)}px`;
-    highlight.classList.remove("active");
-    void highlight.offsetWidth;
-    highlight.classList.add("active");
-    if (sourceHighlightTimerRef.current) {
-      window.clearTimeout(sourceHighlightTimerRef.current);
-    }
-    sourceHighlightTimerRef.current = window.setTimeout(() => {
-      highlight.classList.remove("active");
     }, 720);
   };
 
@@ -842,20 +753,18 @@ export default function Editor() {
     });
   };
 
-  const syncPreviewToCursor = (
-    target: HTMLTextAreaElement,
-    highlight = true,
-    force = false,
-  ) => {
+  const syncPreviewToCursor = (highlight = true, force = false) => {
     if (syncMode === "none" && !force) return;
-    const sourceOffset = target.selectionStart;
-    const caretY = getCaretViewportY(target, sourceOffset);
+    const source = sourceEditorRef.current;
+    if (!source) return;
+    const sourceOffset = source.getCursorOffset();
+    const caretY = source.getCursorViewportY();
     window.requestAnimationFrame(() => {
       syncPreviewToSourceOffset(sourceOffset, caretY, "smooth", highlight);
     });
   };
 
-  const handleSourceScroll = (target: HTMLTextAreaElement) => {
+  const handleSourceScroll = () => {
     if (
       syncMode !== "auto" ||
       suppressSourceScrollRef.current ||
@@ -866,18 +775,12 @@ export default function Editor() {
 
     sourceScrollFrameRef.current = window.requestAnimationFrame(() => {
       sourceScrollFrameRef.current = null;
-      const sourceViewportY = target.clientHeight / 2;
-      const sourceProgress = Math.min(
-        1,
-        Math.max(
-          0,
-          (target.scrollTop + sourceViewportY) /
-            Math.max(1, target.scrollHeight),
-        ),
-      );
+      const source = sourceEditorRef.current;
+      if (!source) return;
+      const { offset, viewportY } = source.getViewportCenter();
       syncPreviewToSourceOffset(
-        Math.round(text.length * sourceProgress),
-        sourceViewportY,
+        offset,
+        viewportY,
         "auto",
         false,
       );
@@ -915,20 +818,17 @@ export default function Editor() {
     const sourceOffset = Math.round(
       sourceStart + (sourceEnd - sourceStart) * blockProgress,
     );
-    const sourceRect = source.getBoundingClientRect();
+    const sourceRect = source.getViewportRect();
     const desiredCaretY = Math.min(
-      source.clientHeight,
+      sourceRect.height,
       Math.max(0, event.clientY - sourceRect.top),
     );
 
-    source.selectionStart = sourceOffset;
-    source.selectionEnd = sourceOffset;
-    source.focus({ preventScroll: true });
     temporarilySuppressSourceScroll();
-    window.requestAnimationFrame(() => {
-      const currentCaretY = getCaretViewportY(source, sourceOffset, false);
-      source.scrollTop += currentCaretY - desiredCaretY;
-      flashSourcePosition(getCaretViewportY(source, sourceOffset));
+    source.revealRange(sourceOffset, sourceOffset, {
+      focus: true,
+      flash: true,
+      viewportY: desiredCaretY,
     });
     flashPreviewTarget(targetBlock);
   };
@@ -961,11 +861,9 @@ export default function Editor() {
     sourceEditorRef.current?.focus();
   };
 
-  const handleTextChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
-    const nextText = event.target.value;
+  const handleTextChange = (nextText: string) => {
     lintUndoRef.current = null;
     setCanUndoLint(false);
-    textRef.current = nextText;
     setText(nextText);
   };
 
@@ -980,49 +878,6 @@ export default function Editor() {
     highlightApi?.registry.delete("openreview-search-results");
     highlightApi?.registry.delete("openreview-search-active");
     previewRangesRef.current = [];
-  };
-
-  const revealSourceMatch = (match: TextMatch) => {
-    const source = sourceEditorRef.current;
-    if (!source) return;
-
-    source.setSelectionRange(match.start, match.end);
-    temporarilySuppressSourceScroll();
-    window.requestAnimationFrame(() => {
-      const currentY = getCaretViewportY(source, match.start, false);
-      source.scrollTop += currentY - source.clientHeight / 2;
-      flashSourcePosition(getCaretViewportY(source, match.start));
-    });
-  };
-
-  const refreshSourceSearch = (
-    value = textRef.current,
-    reveal = false,
-    preferredOffset?: number,
-  ) => {
-    const query = findInputRef.current?.value ?? "";
-    const matches = findLiteralMatches(
-      value,
-      query,
-      findCaseSensitiveRef.current?.checked ?? false,
-    );
-    sourceMatchesRef.current = matches;
-
-    let index = searchMatchIndexRef.current;
-    if (matches.length === 0) {
-      index = -1;
-    } else if (preferredOffset !== undefined) {
-      const nextIndex = matches.findIndex(
-        (match) => match.start >= preferredOffset,
-      );
-      index = nextIndex === -1 ? 0 : nextIndex;
-    } else if (index < 0 || index >= matches.length) {
-      index = 0;
-    }
-
-    searchMatchIndexRef.current = index;
-    updateFindCount(index, matches.length);
-    if (reveal && index >= 0) revealSourceMatch(matches[index]);
   };
 
   const buildPreviewSearchRanges = (query: string, caseSensitive: boolean) => {
@@ -1177,27 +1032,10 @@ export default function Editor() {
     if (reveal && index >= 0) revealPreviewMatch(ranges[index]);
   };
 
-  const refreshActiveSearch = (reveal = true, resetActiveMatch = false) => {
-    if (searchScopeRef.current === "source") {
-      refreshSourceSearch(
-        textRef.current,
-        reveal,
-        resetActiveMatch
-          ? sourceEditorRef.current?.selectionStart ?? 0
-          : undefined,
-      );
-    } else {
-      refreshPreviewSearch(reveal, resetActiveMatch);
-    }
-  };
-
   const moveSearchMatch = (direction: -1 | 1) => {
-    const matches =
-      searchScopeRef.current === "source"
-        ? sourceMatchesRef.current
-        : previewRangesRef.current;
+    const matches = previewRangesRef.current;
     if (matches.length === 0) {
-      refreshActiveSearch(true, true);
+      refreshPreviewSearch(true, true);
       return;
     }
 
@@ -1207,12 +1045,8 @@ export default function Editor() {
     searchMatchIndexRef.current = nextIndex;
     updateFindCount(nextIndex, matches.length);
 
-    if (searchScopeRef.current === "source") {
-      revealSourceMatch(sourceMatchesRef.current[nextIndex]);
-    } else {
-      renderPreviewSearchHighlights();
-      revealPreviewMatch(previewRangesRef.current[nextIndex]);
-    }
+    renderPreviewSearchHighlights();
+    revealPreviewMatch(previewRangesRef.current[nextIndex]);
   };
 
   const closeSearch = () => {
@@ -1226,6 +1060,14 @@ export default function Editor() {
     scope: SearchScope,
     selectReplacement = false,
   ) => {
+    if (scope === "source") {
+      clearPreviewSearchHighlights();
+      searchScopeRef.current = "source";
+      if (findBarRef.current) findBarRef.current.dataset.open = "false";
+      sourceEditorRef.current?.openSearch(selectReplacement);
+      return;
+    }
+
     if (scope !== searchScopeRef.current) clearPreviewSearchHighlights();
     searchScopeRef.current = scope;
     searchMatchIndexRef.current = -1;
@@ -1235,98 +1077,31 @@ export default function Editor() {
       findBarRef.current.dataset.scope = scope;
     }
     if (findScopeLabelRef.current) {
-      findScopeLabelRef.current.textContent =
-        scope === "source" ? ui.edit : ui.preview;
-    }
-    if (findReplaceRowRef.current) {
-      findReplaceRowRef.current.dataset.visible =
-        scope === "source" ? "true" : "false";
+      findScopeLabelRef.current.textContent = ui.preview;
     }
 
     window.requestAnimationFrame(() => {
-      refreshActiveSearch(true, true);
-      const target =
-        selectReplacement && scope === "source"
-          ? replaceInputRef.current
-          : findInputRef.current;
-      target?.focus();
-      target?.select();
+      refreshPreviewSearch(true, true);
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
     });
   };
 
   useEffect(() => {
     previewSearchRefreshRef.current = () => refreshPreviewSearch(false);
-    sourceSearchRefreshRef.current = (value) =>
-      refreshSourceSearch(
-        value,
-        false,
-        sourceEditorRef.current?.selectionStart ?? 0,
-      );
     openSearchRef.current = openSearch;
     closeSearchRef.current = closeSearch;
   });
-
-  const replaceCurrentSearchMatch = () => {
-    if (searchScopeRef.current !== "source") return;
-    refreshSourceSearch(textRef.current);
-    const match = sourceMatchesRef.current[searchMatchIndexRef.current];
-    if (!match) return;
-
-    const replacement = replaceInputRef.current?.value ?? "";
-    const nextText =
-      textRef.current.slice(0, match.start) +
-      replacement +
-      textRef.current.slice(match.end);
-    lintUndoRef.current = null;
-    setCanUndoLint(false);
-    textRef.current = nextText;
-    setText(nextText);
-    window.requestAnimationFrame(() => {
-      refreshSourceSearch(
-        nextText,
-        true,
-        match.start + replacement.length,
-      );
-    });
-  };
-
-  const replaceAllSearchMatches = () => {
-    if (searchScopeRef.current !== "source") return;
-    refreshSourceSearch(textRef.current);
-    const matches = sourceMatchesRef.current;
-    if (matches.length === 0) return;
-
-    const replacement = replaceInputRef.current?.value ?? "";
-    const parts: string[] = [];
-    let offset = 0;
-    for (const match of matches) {
-      parts.push(textRef.current.slice(offset, match.start), replacement);
-      offset = match.end;
-    }
-    parts.push(textRef.current.slice(offset));
-    const nextText = parts.join("");
-
-    lintUndoRef.current = null;
-    setCanUndoLint(false);
-    textRef.current = nextText;
-    setText(nextText);
-    window.requestAnimationFrame(() => {
-      refreshSourceSearch(nextText, true, 0);
-    });
-  };
 
   const jumpToMarkdownWarning = (warning: MarkdownWarning) => {
     const source = sourceEditorRef.current;
     if (!source) return;
 
-    source.selectionStart = warning.start;
-    source.selectionEnd = warning.end;
-    source.focus({ preventScroll: true });
     temporarilySuppressSourceScroll();
-    window.requestAnimationFrame(() => {
-      const currentY = getCaretViewportY(source, warning.start, false);
-      source.scrollTop += currentY - source.clientHeight / 2;
-      flashSourcePosition(getCaretViewportY(source, warning.start));
+    source.revealRange(warning.start, warning.end, {
+      focus: true,
+      flash: true,
+      viewportY: "center",
     });
   };
 
@@ -1493,10 +1268,7 @@ export default function Editor() {
               className="manualSyncAction"
               type="button"
               title={ui.manualSyncTitle}
-              onClick={() => {
-                const source = sourceEditorRef.current;
-                if (source) syncPreviewToCursor(source, true, true);
-              }}
+              onClick={() => syncPreviewToCursor(true, true)}
             >
               {ui.manualSync}
             </button>
@@ -1559,12 +1331,12 @@ export default function Editor() {
         ref={findBarRef}
         className="findBar"
         data-open="false"
-        data-scope="source"
-        aria-label={ui.findAndReplace}
+        data-scope="preview"
+        aria-label={ui.previewFindTitle}
       >
         <div className="findRow">
           <span ref={findScopeLabelRef} className="findScope">
-            {ui.edit}
+            {ui.preview}
           </span>
           <input
             ref={findInputRef}
@@ -1573,7 +1345,7 @@ export default function Editor() {
             placeholder={ui.find}
             aria-label={ui.findContent}
             autoComplete="off"
-            onInput={() => refreshActiveSearch(true, true)}
+            onInput={() => refreshPreviewSearch(true, true)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault();
@@ -1589,7 +1361,7 @@ export default function Editor() {
               ref={findCaseSensitiveRef}
               type="checkbox"
               aria-label={ui.caseSensitive}
-              onChange={() => refreshActiveSearch(true, true)}
+              onChange={() => refreshPreviewSearch(true, true)}
             />
             Aa
           </label>
@@ -1622,36 +1394,6 @@ export default function Editor() {
             onClick={closeSearch}
           >
             ×
-          </button>
-        </div>
-        <div
-          ref={findReplaceRowRef}
-          className="findRow findReplaceRow"
-          data-visible="true"
-        >
-          <span className="findScope">{ui.replace}</span>
-          <input
-            ref={replaceInputRef}
-            className="findInput"
-            type="text"
-            placeholder={ui.replaceWith}
-            aria-label={ui.replaceWith}
-            autoComplete="off"
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                replaceCurrentSearchMatch();
-              } else if (event.key === "Escape") {
-                event.preventDefault();
-                closeSearch();
-              }
-            }}
-          />
-          <button type="button" onClick={replaceCurrentSearchMatch}>
-            {ui.replace}
-          </button>
-          <button type="button" onClick={replaceAllSearchMatches}>
-            {ui.replaceAll}
           </button>
         </div>
       </aside>
@@ -1711,26 +1453,28 @@ export default function Editor() {
             </header>
 
             <div className="sourceEditorWrap">
-              <textarea
+              <SourceEditor
                 ref={sourceEditorRef}
-                aria-label="OpenReview Markdown source"
-                className="sourceEditor"
+                ariaLabel="OpenReview Markdown source"
+                diagnostics={sourceDiagnostics}
+                language={language}
                 value={text}
-                spellCheck
                 onChange={handleTextChange}
                 onFocus={() => {
                   searchScopeRef.current = "source";
                 }}
-                onClick={(event) => syncPreviewToCursor(event.currentTarget)}
-                onKeyUp={(event) =>
-                  syncPreviewToCursor(event.currentTarget, false)
-                }
-                onScroll={(event) => handleSourceScroll(event.currentTarget)}
-              />
-              <div
-                ref={sourceHighlightRef}
-                className="sourceSyncFlash"
-                aria-hidden="true"
+                onScroll={handleSourceScroll}
+                onUserCursorActivity={({ highlight, offset, viewportY }) => {
+                  if (syncMode === "none") return;
+                  window.requestAnimationFrame(() => {
+                    syncPreviewToSourceOffset(
+                      offset,
+                      viewportY,
+                      "smooth",
+                      highlight,
+                    );
+                  });
+                }}
               />
             </div>
           </article>

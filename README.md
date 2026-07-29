@@ -9,7 +9,8 @@ It includes:
 - OpenReview-compatible Markdown, sanitization, MathJax, and typography
 - Real-time preview with click, cursor, and scroll synchronization
 - Bidirectional navigation between source and rendered blocks
-- Lightweight source find/replace and preview search highlighting
+- CodeMirror 6 source editor with Markdown/LaTeX highlighting and find/replace
+- Preview search highlighting with browser-native custom highlights
 - Markdown linting and OpenReview-specific authoring warnings
 - Chinese and English interfaces
 - Automatic browser-local draft persistence
@@ -44,6 +45,7 @@ npm run build    # Create a production build
 npm run build:static # Export a static site to dist/client
 npm run start    # Serve the production build
 npm run lint     # Run static checks
+npm run typecheck # Check TypeScript types
 npm test         # Build and run compatibility tests
 ```
 
@@ -77,7 +79,7 @@ docker run --rm -p 3000:3000 openreview-live-preview
 ## Project structure
 
 ```text
-app/       User interface and styling
+app/       User interface, CodeMirror editor, and styling
 lib/       OpenReview renderer, source mapping, warnings, and lint support
 scripts/   Reproducible browser-bundle generation
 tests/     Renderer and production-output compatibility tests
