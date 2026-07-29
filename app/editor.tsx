@@ -32,6 +32,11 @@ import {
   pairFormulaInputs,
 } from "../lib/formula-diff.mjs";
 import {
+  DEFAULT_REMINDER_SETTINGS,
+  isLostMathDelimiterEnabled,
+  parseReminderSettings,
+} from "../lib/reminder-settings.mjs";
+import {
   SourceEditor,
   type SourceDiagnostic,
   type SourceEditorHandle,
@@ -41,6 +46,10 @@ const STORAGE_KEY = "openreview-live-renderer:draft:v1";
 const SYNC_MODE_KEY = "openreview-live-renderer:sync-mode:v1";
 const LANGUAGE_KEY = "openreview-live-preview:language:v2";
 const NOTICE_KEY = "openreview-live-preview:notice:v1";
+const REMINDER_SETTINGS_KEY =
+  "openreview-live-preview:reminder-settings:v1";
+const TOOLTIP_GAP_PX = 2;
+const TOOLTIP_SWITCH_DELAY_MS = 100;
 const SOURCE_URL = (
   process.env.NEXT_PUBLIC_SOURCE_URL?.trim() ||
   "https://github.com/sharpshark73/openreview-live-preview"
@@ -60,6 +69,18 @@ type MarkdownWarning = {
   end: number;
   message: string;
   start: number;
+};
+type LostMathReminderSettings = {
+  enabled: boolean;
+  inlineDollar: boolean;
+  displayDollar: boolean;
+  inlineParen: boolean;
+  displayBracket: boolean;
+};
+type ReminderSettings = {
+  markdownWarnings: boolean;
+  mathJaxErrors: boolean;
+  lostMath: LostMathReminderSettings;
 };
 
 const UI_TEXT = {
@@ -123,6 +144,24 @@ const UI_TEXT = {
     mathJaxInput: "MathJax 读取到的公式",
     mathJaxMessage: "错误信息",
     moreMenu: "更多",
+    settings: "设置",
+    settingsTitle: "提醒设置",
+    settingsIntro: "这些选项仅保存在当前浏览器。",
+    markdownWarningsSetting: "Markdown 格式提醒",
+    markdownWarningsDescription:
+      "显示编辑器警告标记和左侧警告列表。",
+    mathJaxErrorsSetting: "MathJax 错误提示",
+    mathJaxErrorsDescription:
+      "显示最终预览及单公式预览中的 MathJax 错误信息。",
+    lostMathSetting: "疑似公式在 Markdown 阶段丢失",
+    lostMathDescription:
+      "在 Markdown 调试模式中标出 Markdown 处理后不再能被 MathJax 识别的源公式。",
+    lostMathDelimiters: "检测这些公式分隔符",
+    inlineDollarDelimiter: "行内 $…$",
+    displayDollarDelimiter: "块级 $$…$$",
+    inlineParenDelimiter: "行内 \\(…\\)",
+    displayBracketDelimiter: "块级 \\[…\\]",
+    done: "完成",
     switchLanguage: "Switch to English",
     notice: "声明",
     source: "源码",
@@ -200,6 +239,24 @@ const UI_TEXT = {
     mathJaxInput: "MathJax input",
     mathJaxMessage: "Error message",
     moreMenu: "More",
+    settings: "Settings",
+    settingsTitle: "Reminder settings",
+    settingsIntro: "These preferences are stored only in this browser.",
+    markdownWarningsSetting: "Markdown formatting warnings",
+    markdownWarningsDescription:
+      "Show editor diagnostics and the warning list above the source.",
+    mathJaxErrorsSetting: "MathJax error messages",
+    mathJaxErrorsDescription:
+      "Show MathJax errors in the final preview and single-formula preview.",
+    lostMathSetting: "Possible formula loss during Markdown",
+    lostMathDescription:
+      "In Markdown debug mode, mark source formulas that Markdown prevents MathJax from recognizing.",
+    lostMathDelimiters: "Formula delimiters to check",
+    inlineDollarDelimiter: "Inline $…$",
+    displayDollarDelimiter: "Display $$…$$",
+    inlineParenDelimiter: "Inline \\(…\\)",
+    displayBracketDelimiter: "Display \\[…\\]",
+    done: "Done",
     switchLanguage: "切换到中文",
     notice: "Notice",
     source: "Source",
@@ -640,10 +697,15 @@ function annotateLostSourceMath(
   container: HTMLElement,
   sourceText: string,
   rendered: RenderedMathReference[],
+  settings: LostMathReminderSettings,
   inputLabel: string,
   underscoreSuggestion: string,
   genericSuggestion: string,
 ) {
+  if (!settings.enabled) {
+    return new Map<string, MarkdownLostMathCandidate>();
+  }
+
   const renderedByAnchor = new Map<
     HTMLElement,
     RenderedMathReference[]
@@ -670,7 +732,10 @@ function annotateLostSourceMath(
     const sourceStart = Number(anchor.dataset.sourceStart ?? 0);
     const sourceEnd = Number(anchor.dataset.sourceEnd ?? sourceStart);
     const sourceBlock = sourceText.slice(sourceStart, sourceEnd);
-    const sourceFormulas = findSourceMarkdownMath(sourceBlock);
+    const sourceFormulas = findSourceMarkdownMath(sourceBlock).filter(
+      (formula) =>
+        isLostMathDelimiterEnabled(formula.open, settings),
+    );
     if (sourceFormulas.length === 0) continue;
 
     const renderedFormulas = renderedByAnchor.get(anchor) ?? [];
@@ -773,6 +838,7 @@ function annotatePostMarkdownMath(
   container: HTMLElement,
   inputLabel: string,
   sourceText: string,
+  lostMathSettings: LostMathReminderSettings,
   lostInputLabel: string,
   underscoreSuggestion: string,
   genericSuggestion: string,
@@ -855,6 +921,22 @@ function annotatePostMarkdownMath(
       : undefined;
   }
 
+  const lostMathRenderedReferences = renderedReferences.filter(
+    (formula) => {
+      const candidate = candidates.find(
+        (entry) => entry.id === formula.element.getAttribute(
+          "data-markdown-math-id",
+        ),
+      );
+      return candidate
+        ? isLostMathDelimiterEnabled(
+            candidate.open,
+            lostMathSettings,
+          )
+        : false;
+    },
+  );
+
   return {
     recognized: new Map(
       candidates.map((candidate) => [candidate.id, candidate]),
@@ -862,7 +944,8 @@ function annotatePostMarkdownMath(
     lost: annotateLostSourceMath(
       container,
       sourceText,
-      renderedReferences,
+      lostMathRenderedReferences,
+      lostMathSettings,
       lostInputLabel,
       underscoreSuggestion,
       genericSuggestion,
@@ -947,6 +1030,19 @@ function annotateMathJaxErrors(
         .filter(Boolean)
         .join(". "),
     );
+  }
+}
+
+function clearMathJaxErrorAnnotations(container: HTMLElement) {
+  for (const error of container.querySelectorAll<HTMLElement>(
+    ".mathJaxError",
+  )) {
+    delete error.dataset.openreviewMathError;
+    delete error.dataset.openreviewMathSource;
+    delete error.dataset.openreviewMathOriginal;
+    error.classList.remove("mathJaxError");
+    error.removeAttribute("tabindex");
+    error.removeAttribute("aria-label");
   }
 }
 
@@ -1107,8 +1203,13 @@ export default function Editor() {
   const [canUndoLint, setCanUndoLint] = useState(false);
   const [language, setLanguage] = useState<Language>("zh");
   const [noticeOpen, setNoticeOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [debugMenuOpen, setDebugMenuOpen] = useState(false);
+  const [reminderSettings, setReminderSettings] =
+    useState<ReminderSettings>(() =>
+      parseReminderSettings(DEFAULT_REMINDER_SETTINGS),
+    );
   const ui = UI_TEXT[language];
 
   const sourceEditorRef = useRef<SourceEditorHandle>(null);
@@ -1124,7 +1225,9 @@ export default function Editor() {
   const copyTimerRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
   const mathErrorHideTimerRef = useRef<number | null>(null);
+  const mathErrorSwitchTimerRef = useRef<number | null>(null);
   const markdownMathHideTimerRef = useRef<number | null>(null);
+  const markdownMathSwitchTimerRef = useRef<number | null>(null);
   const markdownMathRenderTimerRef = useRef<number | null>(null);
   const sourceScrollFrameRef = useRef<number | null>(null);
   const suppressSourceScrollRef = useRef(false);
@@ -1163,9 +1266,22 @@ export default function Editor() {
     [sanitizationReady, text],
   );
   const sourceFingerprint = useMemo(() => getTextFingerprint(text), [text]);
+  const reminderFingerprint = [
+    reminderSettings.mathJaxErrors,
+    reminderSettings.lostMath.enabled,
+    reminderSettings.lostMath.inlineDollar,
+    reminderSettings.lostMath.displayDollar,
+    reminderSettings.lostMath.inlineParen,
+    reminderSettings.lostMath.displayBracket,
+  ]
+    .map(Number)
+    .join("");
   const markdownWarnings = useMemo(
-    () => lintOpenReviewMarkdown(text),
-    [text],
+    () =>
+      reminderSettings.markdownWarnings
+        ? lintOpenReviewMarkdown(text)
+        : [],
+    [reminderSettings.markdownWarnings, text],
   );
   const sourceDiagnostics = useMemo<SourceDiagnostic[]>(
     () =>
@@ -1184,6 +1300,9 @@ export default function Editor() {
     const stored = window.localStorage.getItem(STORAGE_KEY);
     const storedSyncMode = window.localStorage.getItem(SYNC_MODE_KEY);
     const storedLanguage = window.localStorage.getItem(LANGUAGE_KEY);
+    const storedReminderSettings = window.localStorage.getItem(
+      REMINDER_SETTINGS_KEY,
+    );
     const noticeAccepted = window.localStorage.getItem(NOTICE_KEY) === "accepted";
     const browserLanguages =
       navigator.languages.length > 0
@@ -1206,6 +1325,9 @@ export default function Editor() {
           ? storedLanguage
           : getPreferredLanguage(browserLanguages),
       );
+      setReminderSettings(
+        parseReminderSettings(storedReminderSettings),
+      );
       setNoticeOpen(!noticeAccepted);
       setDraftLoaded(true);
       setSanitizationReady(true);
@@ -1223,11 +1345,19 @@ export default function Editor() {
   }, [draftLoaded, syncMode]);
 
   useEffect(() => {
+    if (!draftLoaded) return;
+    window.localStorage.setItem(
+      REMINDER_SETTINGS_KEY,
+      JSON.stringify(reminderSettings),
+    );
+  }, [draftLoaded, reminderSettings]);
+
+  useEffect(() => {
     document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
   }, [language]);
 
   useEffect(() => {
-    if (!moreMenuOpen && !debugMenuOpen) return;
+    if (!moreMenuOpen && !debugMenuOpen && !settingsOpen) return;
 
     const handlePointerDown = (event: PointerEvent) => {
       if (!(event.target instanceof Node)) return;
@@ -1247,7 +1377,10 @@ export default function Editor() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      if (debugMenuOpen) {
+      if (settingsOpen) {
+        setSettingsOpen(false);
+        moreMenuTriggerRef.current?.focus();
+      } else if (debugMenuOpen) {
         setDebugMenuOpen(false);
         debugMenuTriggerRef.current?.focus();
       } else {
@@ -1262,7 +1395,7 @@ export default function Editor() {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [debugMenuOpen, moreMenuOpen]);
+  }, [debugMenuOpen, moreMenuOpen, settingsOpen]);
 
   useEffect(() => configureAndLoadMathJax(setMathJaxState), []);
 
@@ -1288,12 +1421,15 @@ export default function Editor() {
       .then(() => mathJax.typesetPromise?.([container]))
       .then(() => {
         if (!cancelled && container.isConnected) {
-          annotateMathJaxErrors(
-            container,
-            language,
-            mathJax.startup?.document,
-            text,
-          );
+          clearMathJaxErrorAnnotations(container);
+          if (reminderSettings.mathJaxErrors) {
+            annotateMathJaxErrors(
+              container,
+              language,
+              mathJax.startup?.document,
+              text,
+            );
+          }
           previewSearchRefreshRef.current?.();
         }
       })
@@ -1312,6 +1448,7 @@ export default function Editor() {
     previewMode,
     previewStage,
     language,
+    reminderSettings.mathJaxErrors,
     text,
   ]);
 
@@ -1332,6 +1469,7 @@ export default function Editor() {
         container,
         ui.markdownMathInput,
         text,
+        reminderSettings.lostMath,
         ui.lostMathTitle,
         ui.lostMathUnderscoreHint,
         ui.lostMathGenericHint,
@@ -1345,6 +1483,7 @@ export default function Editor() {
     sanitizedHtml,
     previewMode,
     previewStage,
+    reminderSettings.lostMath,
     text,
     ui.lostMathGenericHint,
     ui.lostMathTitle,
@@ -1427,8 +1566,14 @@ export default function Editor() {
       if (mathErrorHideTimerRef.current) {
         window.clearTimeout(mathErrorHideTimerRef.current);
       }
+      if (mathErrorSwitchTimerRef.current) {
+        window.clearTimeout(mathErrorSwitchTimerRef.current);
+      }
       if (markdownMathHideTimerRef.current) {
         window.clearTimeout(markdownMathHideTimerRef.current);
+      }
+      if (markdownMathSwitchTimerRef.current) {
+        window.clearTimeout(markdownMathSwitchTimerRef.current);
       }
       if (markdownMathRenderTimerRef.current) {
         window.clearTimeout(markdownMathRenderTimerRef.current);
@@ -1925,6 +2070,10 @@ export default function Editor() {
       : null;
 
   const hideMathErrorTooltip = () => {
+    if (mathErrorSwitchTimerRef.current !== null) {
+      window.clearTimeout(mathErrorSwitchTimerRef.current);
+      mathErrorSwitchTimerRef.current = null;
+    }
     if (mathErrorHideTimerRef.current !== null) {
       window.clearTimeout(mathErrorHideTimerRef.current);
       mathErrorHideTimerRef.current = null;
@@ -1949,6 +2098,17 @@ export default function Editor() {
     mathErrorHideTimerRef.current = null;
   };
 
+  const cancelMathErrorTooltipSwitch = () => {
+    if (mathErrorSwitchTimerRef.current === null) return;
+    window.clearTimeout(mathErrorSwitchTimerRef.current);
+    mathErrorSwitchTimerRef.current = null;
+  };
+
+  const keepMathErrorTooltipOpen = () => {
+    cancelMathErrorTooltipHide();
+    cancelMathErrorTooltipSwitch();
+  };
+
   const positionMathErrorTooltip = (
     target: HTMLElement,
     tooltip: HTMLElement,
@@ -1966,9 +2126,12 @@ export default function Editor() {
       Math.max(12, window.innerWidth - tooltipRect.width - 12),
     );
     const top = placeAbove
-      ? Math.max(12, rect.top - tooltipRect.height - 10)
+      ? Math.max(
+          12,
+          rect.top - tooltipRect.height - TOOLTIP_GAP_PX,
+        )
       : Math.min(
-          Math.max(12, rect.bottom + 10),
+          Math.max(12, rect.bottom + TOOLTIP_GAP_PX),
           Math.max(12, window.innerHeight - tooltipRect.height - 12),
         );
     tooltip.classList.toggle("above", placeAbove);
@@ -1977,6 +2140,10 @@ export default function Editor() {
   };
 
   const showMathErrorTooltip = (target: EventTarget | null) => {
+    if (!reminderSettings.mathJaxErrors) {
+      hideMathErrorTooltip();
+      return;
+    }
     const error = getMathErrorTarget(target);
     const message = error?.dataset.openreviewMathError;
     if (!error || !message) {
@@ -1984,6 +2151,7 @@ export default function Editor() {
       return;
     }
 
+    cancelMathErrorTooltipSwitch();
     cancelMathErrorTooltipHide();
     const tooltip = mathErrorTooltipRef.current;
     if (!tooltip) return;
@@ -2034,12 +2202,27 @@ export default function Editor() {
 
   const handleMathErrorPointerMove = (target: EventTarget | null) => {
     const error = getMathErrorTarget(target);
-    if (error === mathErrorTargetRef.current) return;
-    if (error) {
-      showMathErrorTooltip(error);
-    } else {
-      scheduleMathErrorTooltipHide();
+    if (error === mathErrorTargetRef.current) {
+      keepMathErrorTooltipOpen();
+      return;
     }
+    if (!error) {
+      cancelMathErrorTooltipSwitch();
+      scheduleMathErrorTooltipHide();
+      return;
+    }
+
+    cancelMathErrorTooltipHide();
+    if (!mathErrorTargetRef.current) {
+      showMathErrorTooltip(error);
+      return;
+    }
+
+    cancelMathErrorTooltipSwitch();
+    mathErrorSwitchTimerRef.current = window.setTimeout(() => {
+      mathErrorSwitchTimerRef.current = null;
+      if (error.isConnected) showMathErrorTooltip(error);
+    }, TOOLTIP_SWITCH_DELAY_MS);
   };
 
   const getMarkdownMathTarget = (target: EventTarget | null) =>
@@ -2064,6 +2247,10 @@ export default function Editor() {
   };
 
   const hideMarkdownMathTooltip = () => {
+    if (markdownMathSwitchTimerRef.current !== null) {
+      window.clearTimeout(markdownMathSwitchTimerRef.current);
+      markdownMathSwitchTimerRef.current = null;
+    }
     if (markdownMathHideTimerRef.current !== null) {
       window.clearTimeout(markdownMathHideTimerRef.current);
       markdownMathHideTimerRef.current = null;
@@ -2093,6 +2280,17 @@ export default function Editor() {
     markdownMathHideTimerRef.current = null;
   };
 
+  const cancelMarkdownMathTooltipSwitch = () => {
+    if (markdownMathSwitchTimerRef.current === null) return;
+    window.clearTimeout(markdownMathSwitchTimerRef.current);
+    markdownMathSwitchTimerRef.current = null;
+  };
+
+  const keepMarkdownMathTooltipOpen = () => {
+    cancelMarkdownMathTooltipHide();
+    cancelMarkdownMathTooltipSwitch();
+  };
+
   const positionMarkdownMathTooltip = (
     target: HTMLElement,
     tooltip: HTMLElement,
@@ -2110,9 +2308,12 @@ export default function Editor() {
       Math.max(12, window.innerWidth - tooltipRect.width - 12),
     );
     const top = placeAbove
-      ? Math.max(12, rect.top - tooltipRect.height - 10)
+      ? Math.max(
+          12,
+          rect.top - tooltipRect.height - TOOLTIP_GAP_PX,
+        )
       : Math.min(
-          Math.max(12, rect.bottom + 10),
+          Math.max(12, rect.bottom + TOOLTIP_GAP_PX),
           Math.max(12, window.innerHeight - tooltipRect.height - 12),
         );
     tooltip.classList.toggle("above", placeAbove);
@@ -2134,7 +2335,9 @@ export default function Editor() {
       showMarkdownMathErrors(
         output,
         ui.mathJaxMessage,
-        getMathJaxErrorMessages(output),
+        reminderSettings.mathJaxErrors
+          ? getMathJaxErrorMessages(output)
+          : [],
       );
       const tooltip = markdownMathTooltipRef.current;
       if (tooltip) positionMarkdownMathTooltip(target, tooltip);
@@ -2172,7 +2375,9 @@ export default function Editor() {
         showMarkdownMathErrors(
           output,
           ui.mathJaxMessage,
-          getMathJaxErrorMessages(output),
+          reminderSettings.mathJaxErrors
+            ? getMathJaxErrorMessages(output)
+            : [],
         );
         const tooltip = markdownMathTooltipRef.current;
         if (tooltip) positionMarkdownMathTooltip(target, tooltip);
@@ -2180,9 +2385,17 @@ export default function Editor() {
       .catch((error: unknown) => {
         if (requestId === markdownMathRequestRef.current) {
           output.textContent = ui.formulaRenderFailed;
-          showMarkdownMathErrors(output, ui.mathJaxMessage, [
-            error instanceof Error ? error.message : String(error),
-          ]);
+          showMarkdownMathErrors(
+            output,
+            ui.mathJaxMessage,
+            reminderSettings.mathJaxErrors
+              ? [
+                  error instanceof Error
+                    ? error.message
+                    : String(error),
+                ]
+              : [],
+          );
           const tooltip = markdownMathTooltipRef.current;
           if (tooltip) positionMarkdownMathTooltip(target, tooltip);
         }
@@ -2190,6 +2403,7 @@ export default function Editor() {
   };
 
   const showMarkdownMathTooltip = (target: EventTarget | null) => {
+    cancelMarkdownMathTooltipSwitch();
     const marker = getMarkdownMathTarget(target);
     const lostId = marker?.dataset.markdownLostMathId;
     const lostCandidate = lostId
@@ -2331,11 +2545,31 @@ export default function Editor() {
 
   const handleMarkdownMathPointerMove = (target: EventTarget | null) => {
     const marker = getMarkdownMathTarget(target);
-    if (marker) {
-      showMarkdownMathTooltip(marker);
-    } else {
-      scheduleMarkdownMathTooltipHide();
+    const markerId =
+      marker?.dataset.markdownLostMathId ??
+      marker?.dataset.markdownMathId ??
+      null;
+    if (markerId === markdownMathTargetIdRef.current) {
+      keepMarkdownMathTooltipOpen();
+      return;
     }
+    if (!marker || !markerId) {
+      cancelMarkdownMathTooltipSwitch();
+      scheduleMarkdownMathTooltipHide();
+      return;
+    }
+
+    cancelMarkdownMathTooltipHide();
+    if (!markdownMathTargetIdRef.current) {
+      showMarkdownMathTooltip(marker);
+      return;
+    }
+
+    cancelMarkdownMathTooltipSwitch();
+    markdownMathSwitchTimerRef.current = window.setTimeout(() => {
+      markdownMathSwitchTimerRef.current = null;
+      if (marker.isConnected) showMarkdownMathTooltip(marker);
+    }, TOOLTIP_SWITCH_DELAY_MS);
   };
 
   const acceptNotice = () => {
@@ -2349,6 +2583,29 @@ export default function Editor() {
       window.localStorage.setItem(LANGUAGE_KEY, nextLanguage);
       return nextLanguage;
     });
+  };
+
+  const updateReminderToggle = (
+    key: "markdownWarnings" | "mathJaxErrors",
+    checked: boolean,
+  ) => {
+    setReminderSettings((current) => ({
+      ...current,
+      [key]: checked,
+    }));
+  };
+
+  const updateLostMathToggle = (
+    key: keyof LostMathReminderSettings,
+    checked: boolean,
+  ) => {
+    setReminderSettings((current) => ({
+      ...current,
+      lostMath: {
+        ...current.lostMath,
+        [key]: checked,
+      },
+    }));
   };
 
   return (
@@ -2450,6 +2707,16 @@ export default function Editor() {
                 aria-label={ui.moreMenu}
                 hidden={!moreMenuOpen}
               >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    setSettingsOpen(true);
+                  }}
+                >
+                  {ui.settings}
+                </button>
                 <a
                   className="legalLink"
                   href={SOURCE_URL}
@@ -2792,7 +3059,7 @@ export default function Editor() {
                       Preview:
                     </strong>{" "}
                     <div
-                      key={`published-${previewStage}-${language}-${sourceFingerprint}`}
+                      key={`published-${previewStage}-${language}-${sourceFingerprint}-${reminderFingerprint}`}
                       ref={previewRef}
                       className={`note-content-value markdown-rendered ${
                         previewStage === "markdown"
@@ -2806,7 +3073,7 @@ export default function Editor() {
                   </div>
                 ) : (
                   <div
-                    key={`form-${previewStage}-${language}-${sourceFingerprint}`}
+                    key={`form-${previewStage}-${language}-${sourceFingerprint}-${reminderFingerprint}`}
                     ref={previewRef}
                     className={`form-preview markdown-rendered ${
                       previewStage === "markdown"
@@ -2826,7 +3093,7 @@ export default function Editor() {
         ref={mathErrorTooltipRef}
         className="mathErrorTooltip below"
         role="tooltip"
-        onPointerEnter={cancelMathErrorTooltipHide}
+        onPointerEnter={keepMathErrorTooltipOpen}
         onPointerLeave={hideMathErrorTooltip}
         hidden
       />
@@ -2834,10 +3101,163 @@ export default function Editor() {
         ref={markdownMathTooltipRef}
         className="markdownMathTooltip"
         role="tooltip"
-        onPointerEnter={cancelMarkdownMathTooltipHide}
+        onPointerEnter={keepMarkdownMathTooltipOpen}
         onPointerLeave={hideMarkdownMathTooltip}
         hidden
       />
+      {settingsOpen ? (
+        <div
+          className="noticeBackdrop settingsBackdrop"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setSettingsOpen(false);
+            }
+          }}
+        >
+          <section
+            className="settingsDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+            aria-describedby="settings-description"
+          >
+            <header className="settingsHeader">
+              <div>
+                <div className="noticeEyebrow">
+                  OpenReview Live Preview
+                </div>
+                <h2 id="settings-title">{ui.settingsTitle}</h2>
+              </div>
+              <button
+                className="settingsClose"
+                type="button"
+                aria-label={ui.done}
+                onClick={() => setSettingsOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <p id="settings-description" className="settingsIntro">
+              {ui.settingsIntro}
+            </p>
+
+            <div className="settingsList">
+              <label className="settingsToggle">
+                <input
+                  type="checkbox"
+                  checked={reminderSettings.markdownWarnings}
+                  onChange={(event) =>
+                    updateReminderToggle(
+                      "markdownWarnings",
+                      event.currentTarget.checked,
+                    )
+                  }
+                />
+                <span>
+                  <strong>{ui.markdownWarningsSetting}</strong>
+                  <small>{ui.markdownWarningsDescription}</small>
+                </span>
+              </label>
+
+              <label className="settingsToggle">
+                <input
+                  type="checkbox"
+                  checked={reminderSettings.mathJaxErrors}
+                  onChange={(event) =>
+                    updateReminderToggle(
+                      "mathJaxErrors",
+                      event.currentTarget.checked,
+                    )
+                  }
+                />
+                <span>
+                  <strong>{ui.mathJaxErrorsSetting}</strong>
+                  <small>{ui.mathJaxErrorsDescription}</small>
+                </span>
+              </label>
+
+              <div className="settingsGroup">
+                <label className="settingsToggle">
+                  <input
+                    type="checkbox"
+                    checked={reminderSettings.lostMath.enabled}
+                    onChange={(event) =>
+                      updateLostMathToggle(
+                        "enabled",
+                        event.currentTarget.checked,
+                      )
+                    }
+                  />
+                  <span>
+                    <strong>{ui.lostMathSetting}</strong>
+                    <small>{ui.lostMathDescription}</small>
+                  </span>
+                </label>
+                <fieldset
+                  className="delimiterSettings"
+                  disabled={!reminderSettings.lostMath.enabled}
+                >
+                  <legend>{ui.lostMathDelimiters}</legend>
+                  {[
+                    [
+                      "inlineDollar",
+                      ui.inlineDollarDelimiter,
+                      "$…$",
+                    ],
+                    [
+                      "displayDollar",
+                      ui.displayDollarDelimiter,
+                      "$$…$$",
+                    ],
+                    [
+                      "inlineParen",
+                      ui.inlineParenDelimiter,
+                      "\\(…\\)",
+                    ],
+                    [
+                      "displayBracket",
+                      ui.displayBracketDelimiter,
+                      "\\[…\\]",
+                    ],
+                  ].map(([key, label, delimiter]) => (
+                    <label
+                      className="delimiterSetting"
+                      key={key}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={
+                          reminderSettings.lostMath[
+                            key as keyof LostMathReminderSettings
+                          ]
+                        }
+                        onChange={(event) =>
+                          updateLostMathToggle(
+                            key as keyof LostMathReminderSettings,
+                            event.currentTarget.checked,
+                          )
+                        }
+                      />
+                      <span>{label}</span>
+                      <code>{delimiter}</code>
+                    </label>
+                  ))}
+                </fieldset>
+              </div>
+            </div>
+
+            <div className="settingsActions">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setSettingsOpen(false)}
+              >
+                {ui.done}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       {noticeOpen ? (
         <div className="noticeBackdrop">
           <section

@@ -21,6 +21,10 @@ import {
   pairFormulaInputs,
 } from "../lib/formula-diff.mjs";
 import {
+  isLostMathDelimiterEnabled,
+  parseReminderSettings,
+} from "../lib/reminder-settings.mjs";
+import {
   parseOpenReviewMarkdown,
   renderOpenReviewMarkdown,
   renderOpenReviewMarkdownWithAnchors,
@@ -266,6 +270,46 @@ test("finds source formulas but ignores Markdown code regions", () => {
   );
 });
 
+test("persists reminder settings and filters lost-formula delimiters", () => {
+  const settings = parseReminderSettings(
+    JSON.stringify({
+      markdownWarnings: false,
+      mathJaxErrors: false,
+      lostMath: {
+        enabled: true,
+        inlineDollar: false,
+        displayDollar: true,
+        inlineParen: false,
+        displayBracket: true,
+      },
+    }),
+  );
+
+  assert.equal(settings.markdownWarnings, false);
+  assert.equal(settings.mathJaxErrors, false);
+  assert.equal(isLostMathDelimiterEnabled("$", settings.lostMath), false);
+  assert.equal(isLostMathDelimiterEnabled("$$", settings.lostMath), true);
+  assert.equal(isLostMathDelimiterEnabled("\\(", settings.lostMath), false);
+  assert.equal(isLostMathDelimiterEnabled("\\[", settings.lostMath), true);
+  assert.deepEqual(
+    parseReminderSettings("{not json").lostMath,
+    {
+      enabled: true,
+      inlineDollar: true,
+      displayDollar: true,
+      inlineParen: true,
+      displayBracket: true,
+    },
+  );
+  assert.equal(
+    isLostMathDelimiterEnabled("$$", {
+      ...settings.lostMath,
+      enabled: false,
+    }),
+    false,
+  );
+});
+
 test("ships the Markdown-stage formula inspector", async () => {
   const [editorSource, styles] = await Promise.all([
     readFile(new URL("../app/editor.tsx", import.meta.url), "utf8"),
@@ -280,6 +324,13 @@ test("ships the Markdown-stage formula inspector", async () => {
   assert.match(editorSource, /tex2chtmlPromise/);
   assert.match(editorSource, /getMathJaxErrorMessages/);
   assert.match(editorSource, /showMarkdownMathErrors/);
+  assert.match(editorSource, /TOOLTIP_GAP_PX = 2/);
+  assert.match(editorSource, /TOOLTIP_SWITCH_DELAY_MS = 100/);
+  assert.match(editorSource, /mathErrorSwitchTimerRef/);
+  assert.match(editorSource, /markdownMathSwitchTimerRef/);
+  assert.match(editorSource, /REMINDER_SETTINGS_KEY/);
+  assert.match(editorSource, /isLostMathDelimiterEnabled/);
+  assert.match(editorSource, /Possible formula loss during Markdown/);
   assert.match(editorSource, /openreviewMathOriginal/);
   assert.match(editorSource, /createFormulaComparison/);
   assert.match(
@@ -296,6 +347,8 @@ test("ships the Markdown-stage formula inspector", async () => {
   assert.match(styles, /\.mathFormulaMismatch/);
   assert.match(styles, /\.mathFormulaDiffRemoved/);
   assert.match(styles, /\.mathFormulaDiffAdded/);
+  assert.match(styles, /\.settingsDialog/);
+  assert.match(styles, /\.delimiterSettings/);
 });
 
 test("ships the AGPL license and first-visit unofficial notice", async () => {
