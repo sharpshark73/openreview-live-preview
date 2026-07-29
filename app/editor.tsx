@@ -1786,10 +1786,12 @@ export default function Editor() {
     const messageSection = document.createElement("section");
     const messageLabel = document.createElement("div");
     const messageText = document.createElement("div");
-    messageSection.className = "mathErrorTooltipSection";
-    messageLabel.className = "mathErrorTooltipLabel";
+    messageSection.className =
+      "mathErrorTooltipSection markdownMathTooltipError";
+    messageLabel.className = "markdownMathTooltipErrorLabel";
     messageLabel.textContent = ui.mathJaxMessage;
-    messageText.className = "mathErrorTooltipMessage";
+    messageText.className =
+      "mathErrorTooltipMessage markdownMathTooltipErrorMessages";
     messageText.textContent = message;
     messageSection.append(messageLabel, messageText);
     content.append(messageSection);

@@ -234,6 +234,10 @@ test("ships the Markdown-stage formula inspector", async () => {
   assert.match(editorSource, /showMarkdownMathErrors/);
   assert.match(editorSource, /openreviewMathOriginal/);
   assert.match(editorSource, /createFormulaComparison/);
+  assert.match(
+    editorSource,
+    /mathErrorTooltipSection markdownMathTooltipError/,
+  );
   assert.match(editorSource, /MathJax input after Markdown/);
   assert.match(editorSource, /Differs from original Markdown/);
   assert.match(styles, /\.markdownMathCandidate/);
