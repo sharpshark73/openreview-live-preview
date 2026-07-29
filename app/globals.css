@@ -260,6 +260,61 @@ a:focus {
   background: var(--or-red-dark);
 }
 
+.moreMenu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.topbar .moreMenuTrigger {
+  width: 36px;
+  padding: 5px 7px;
+  letter-spacing: 0.08em;
+}
+
+.moreMenuPanel {
+  position: absolute;
+  z-index: 120;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  width: 148px;
+  padding: 5px;
+  background: #fff;
+  border: 1px solid #c7c4be;
+  box-shadow: 0 8px 24px rgba(44, 58, 74, 0.2);
+}
+
+.moreMenuPanel[hidden] {
+  display: none;
+}
+
+.topbar .moreMenuPanel button,
+.topbar .moreMenuPanel .legalLink {
+  width: 100%;
+  min-height: 32px;
+  justify-content: flex-start;
+  padding: 7px 9px;
+  color: #4d5b61;
+  background: transparent;
+  border: 0;
+  font-size: 0.72rem;
+  text-align: left;
+}
+
+.topbar .moreMenuPanel button:hover,
+.topbar .moreMenuPanel button:focus-visible,
+.topbar .moreMenuPanel .legalLink:hover,
+.topbar .moreMenuPanel .legalLink:focus-visible {
+  color: #fff;
+  background: var(--or-blue-dark);
+  outline: 0;
+}
+
+.topbar .moreMenuPanel .languageMenuItem {
+  margin-top: 4px;
+  border-top: 1px solid #e4e1db;
+}
+
 .workspace {
   display: grid;
   min-width: 0;
@@ -1106,8 +1161,12 @@ a:focus {
     flex: 1;
   }
 
-  .toolbarActions .legalLink {
-    flex: 1;
+  .toolbarActions .moreMenuTrigger {
+    flex: 0 0 36px;
+  }
+
+  .moreMenuPanel {
+    right: 0;
   }
 
   .noticeDialog {

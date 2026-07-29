@@ -84,6 +84,7 @@ const UI_TEXT = {
     mathJaxError: "MathJax 错误",
     mathJaxInput: "MathJax 读取到的公式",
     mathJaxMessage: "错误信息",
+    moreMenu: "更多",
     switchLanguage: "Switch to English",
     notice: "声明",
     source: "源码",
@@ -139,6 +140,7 @@ const UI_TEXT = {
     mathJaxError: "MathJax error",
     mathJaxInput: "MathJax input",
     mathJaxMessage: "Error message",
+    moreMenu: "More",
     switchLanguage: "切换到中文",
     notice: "Notice",
     source: "Source",
@@ -406,6 +408,7 @@ export default function Editor() {
   const [canUndoLint, setCanUndoLint] = useState(false);
   const [language, setLanguage] = useState<Language>("zh");
   const [noticeOpen, setNoticeOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const ui = UI_TEXT[language];
 
   const sourceEditorRef = useRef<SourceEditorHandle>(null);
@@ -413,6 +416,8 @@ export default function Editor() {
   const previewViewportRef = useRef<HTMLDivElement>(null);
   const mathErrorTooltipRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+  const moreMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const copyTimerRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
   const mathErrorHideTimerRef = useRef<number | null>(null);
@@ -501,6 +506,32 @@ export default function Editor() {
     if (!draftLoaded) return;
     window.localStorage.setItem(LANGUAGE_KEY, language);
   }, [draftLoaded, language]);
+
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !moreMenuRef.current?.contains(event.target)
+      ) {
+        setMoreMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setMoreMenuOpen(false);
+      moreMenuTriggerRef.current?.focus();
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [moreMenuOpen]);
 
   useEffect(() => configureAndLoadMathJax(setMathJaxState), []);
 
@@ -1302,28 +1333,61 @@ export default function Editor() {
             <button className="primaryAction" type="button" onClick={handleCopy}>
               {copied ? ui.copied : ui.copy}
             </button>
-            <a
-              className="legalLink"
-              href={SOURCE_URL}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {ui.source}
-            </a>
-            <button type="button" onClick={() => setNoticeOpen(true)}>
-              {ui.notice}
-            </button>
-            <button
-              className="languageSwitch"
-              type="button"
-              title={ui.switchLanguage}
-              aria-label={ui.switchLanguage}
-              onClick={() =>
-                setLanguage((current) => (current === "zh" ? "en" : "zh"))
-              }
-            >
-              {language === "zh" ? "EN" : "中文"}
-            </button>
+            <div ref={moreMenuRef} className="moreMenu">
+              <button
+                ref={moreMenuTriggerRef}
+                className="moreMenuTrigger"
+                type="button"
+                aria-label={ui.moreMenu}
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+                onClick={() => setMoreMenuOpen((current) => !current)}
+              >
+                <span aria-hidden="true">•••</span>
+              </button>
+              <div
+                className="moreMenuPanel"
+                role="menu"
+                aria-label={ui.moreMenu}
+                hidden={!moreMenuOpen}
+              >
+                <a
+                  className="legalLink"
+                  href={SOURCE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  role="menuitem"
+                  onClick={() => setMoreMenuOpen(false)}
+                >
+                  {ui.source}
+                </a>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    setNoticeOpen(true);
+                  }}
+                >
+                  {ui.notice}
+                </button>
+                <button
+                  className="languageMenuItem"
+                  type="button"
+                  role="menuitem"
+                  title={ui.switchLanguage}
+                  aria-label={ui.switchLanguage}
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    setLanguage((current) =>
+                      current === "zh" ? "en" : "zh",
+                    );
+                  }}
+                >
+                  {language === "zh" ? "English" : "中文"}
+                </button>
+              </div>
+            </div>
           </div>
       </header>
 

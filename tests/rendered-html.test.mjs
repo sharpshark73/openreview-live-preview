@@ -51,8 +51,11 @@ test("server-renders the finished OpenReview tool", async () => {
   assert.match(html, />自动同步<\/button>/);
   assert.match(html, />手动同步<\/button>/);
   assert.match(html, />Lint<\/button>/);
+  assert.match(html, /aria-label="更多"/);
+  assert.match(html, /aria-haspopup="menu"/);
+  assert.match(html, /role="menu"/);
   assert.match(html, /aria-label="Switch to English"/);
-  assert.match(html, />EN<\/button>/);
+  assert.match(html, />English<\/button>/);
   assert.match(html, /aria-label="查找（Ctrl\/⌘\+F）"/);
   assert.match(html, /placeholder="查找"/);
   assert.match(html, /data-scope="preview"/);
