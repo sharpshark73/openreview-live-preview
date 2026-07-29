@@ -1183,6 +1183,31 @@ a:focus {
   overflow-y: hidden;
 }
 
+.markdownMathTooltipError {
+  padding: 8px;
+  color: #6f1812;
+  background: #fff3f1;
+  border: 1px solid rgba(140, 27, 19, 0.28);
+  border-left: 3px solid var(--or-red);
+  border-radius: 2px;
+}
+
+.markdownMathTooltipErrorLabel {
+  margin-bottom: 4px;
+  color: var(--or-red);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.markdownMathTooltipErrorMessages {
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .mathErrorTooltipHeader {
   padding: 7px 10px 6px;
   color: var(--or-red);

@@ -78,6 +78,7 @@ const UI_TEXT = {
     formulaPreview: "单公式预览",
     renderingFormula: "正在渲染…",
     mathJaxUnavailable: "MathJax 尚未就绪",
+    formulaRenderFailed: "公式渲染失败",
     find: "查找",
     findContent: "查找内容",
     caseSensitive: "区分大小写",
@@ -140,6 +141,7 @@ const UI_TEXT = {
     formulaPreview: "Formula preview",
     renderingFormula: "Rendering…",
     mathJaxUnavailable: "MathJax is not ready",
+    formulaRenderFailed: "Formula rendering failed",
     find: "Find",
     findContent: "Find text",
     caseSensitive: "Match case",
@@ -552,10 +554,7 @@ function annotateMathJaxErrors(
   const errors = container.querySelectorAll<HTMLElement>("mjx-merror");
 
   for (const error of errors) {
-    const message =
-      error.getAttribute("data-mjx-error") ||
-      error.getAttribute("data-mjx-message") ||
-      error.textContent?.trim();
+    const message = getMathJaxErrorMessage(error);
     if (!message) continue;
 
     const typesetRoot = error.closest("mjx-container");
@@ -581,6 +580,50 @@ function annotateMathJaxErrors(
         .join(". "),
     );
   }
+}
+
+function getMathJaxErrorMessage(error: Element) {
+  return (
+    error.getAttribute("data-mjx-error") ||
+    error.getAttribute("data-mjx-message") ||
+    error.textContent?.trim() ||
+    ""
+  );
+}
+
+function getMathJaxErrorMessages(container: ParentNode) {
+  return Array.from(container.querySelectorAll("mjx-merror"))
+    .map(getMathJaxErrorMessage)
+    .filter((message, index, messages) => (
+      Boolean(message) && messages.indexOf(message) === index
+    ));
+}
+
+function showMarkdownMathErrors(
+  output: HTMLElement,
+  label: string,
+  messages: string[],
+) {
+  const existing = output.nextElementSibling;
+  if (existing?.classList.contains("markdownMathTooltipError")) {
+    existing.remove();
+  }
+  if (messages.length === 0) return;
+
+  const section = document.createElement("section");
+  section.className = "markdownMathTooltipError";
+  const heading = document.createElement("div");
+  heading.className = "markdownMathTooltipErrorLabel";
+  heading.textContent = label;
+  const messageList = document.createElement("div");
+  messageList.className = "markdownMathTooltipErrorMessages";
+  for (const message of messages) {
+    const item = document.createElement("div");
+    item.textContent = message;
+    messageList.append(item);
+  }
+  section.append(heading, messageList);
+  output.insertAdjacentElement("afterend", section);
 }
 
 export default function Editor() {
@@ -1563,7 +1606,13 @@ export default function Editor() {
     const cacheKey = `${candidate.display ? "display" : "inline"}:${candidate.math}`;
     const cached = markdownMathCacheRef.current.get(cacheKey);
     if (cached) {
-      output.replaceChildren(cached.cloneNode(true));
+      const rendered = cached.cloneNode(true);
+      output.replaceChildren(rendered);
+      showMarkdownMathErrors(
+        output,
+        ui.mathJaxMessage,
+        getMathJaxErrorMessages(output),
+      );
       const tooltip = markdownMathTooltipRef.current;
       if (tooltip) positionMarkdownMathTooltip(target, tooltip);
       return;
@@ -1597,12 +1646,22 @@ export default function Editor() {
         }
         markdownMathCacheRef.current.set(cacheKey, rendered.cloneNode(true) as Element);
         output.replaceChildren(rendered);
+        showMarkdownMathErrors(
+          output,
+          ui.mathJaxMessage,
+          getMathJaxErrorMessages(output),
+        );
         const tooltip = markdownMathTooltipRef.current;
         if (tooltip) positionMarkdownMathTooltip(target, tooltip);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (requestId === markdownMathRequestRef.current) {
-          output.textContent = ui.mathJaxUnavailable;
+          output.textContent = ui.formulaRenderFailed;
+          showMarkdownMathErrors(output, ui.mathJaxMessage, [
+            error instanceof Error ? error.message : String(error),
+          ]);
+          const tooltip = markdownMathTooltipRef.current;
+          if (tooltip) positionMarkdownMathTooltip(target, tooltip);
         }
       });
   };

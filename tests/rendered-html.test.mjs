@@ -188,9 +188,12 @@ test("ships the Markdown-stage formula inspector", async () => {
 
   assert.match(editorSource, /annotatePostMarkdownMath/);
   assert.match(editorSource, /tex2chtmlPromise/);
+  assert.match(editorSource, /getMathJaxErrorMessages/);
+  assert.match(editorSource, /showMarkdownMathErrors/);
   assert.match(editorSource, /MathJax input after Markdown/);
   assert.match(styles, /\.markdownMathCandidate/);
   assert.match(styles, /\.markdownMathTooltipOutput/);
+  assert.match(styles, /\.markdownMathTooltipError/);
 });
 
 test("ships the AGPL license and first-visit unofficial notice", async () => {
