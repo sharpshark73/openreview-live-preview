@@ -5,6 +5,7 @@ import DOMPurify from "isomorphic-dompurify";
 import { lintAndFixMarkdown } from "../lib/markdown-lint-fix.mjs";
 import { lintOpenReviewMarkdown } from "../lib/markdown-warnings.mjs";
 import { findLiteralMatches } from "../lib/text-search.mjs";
+import { getPreferredLanguage } from "../lib/language-preference.mjs";
 import {
   parseOpenReviewMarkdown,
   renderOpenReviewMarkdown,
@@ -93,6 +94,15 @@ test("uses the OpenReview package versions and official Markdown linter", async 
   assert.equal(JSON.parse(markdownlintPackage).version, "0.40.0");
 });
 
+test("selects the default interface language from browser preferences", () => {
+  assert.equal(getPreferredLanguage(["zh-CN"]), "zh");
+  assert.equal(getPreferredLanguage(["zh-Hant-TW", "en-US"]), "zh");
+  assert.equal(getPreferredLanguage(["en-GB", "zh-CN"]), "en");
+  assert.equal(getPreferredLanguage(["ja-JP", "zh-CN"]), "zh");
+  assert.equal(getPreferredLanguage(["fr-FR"]), "en");
+  assert.equal(getPreferredLanguage([]), "en");
+});
+
 test("uses CodeMirror 6 for Markdown editing, search, lint, and source sync", async () => {
   const [packageSource, editorSource] = await Promise.all([
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -140,6 +150,9 @@ test("ships the AGPL license and first-visit unofficial notice", async () => {
   assert.match(pageSource, /openreview-live-preview:notice:v1/);
   assert.match(pageSource, /independent, unofficial tool/);
   assert.match(pageSource, /NEXT_PUBLIC_SOURCE_URL/);
+  assert.match(pageSource, /openreview-live-preview:language:v2/);
+  assert.match(pageSource, /navigator\.languages/);
+  assert.match(pageSource, /getPreferredLanguage/);
   assert.match(
     notices,
     /not\s+affiliated with, authorized by, or endorsed by OpenReview/,

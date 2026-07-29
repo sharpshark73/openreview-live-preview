@@ -15,6 +15,7 @@ import {
 import { lintOpenReviewMarkdown } from "../lib/markdown-warnings.mjs";
 import { lintAndFixMarkdown } from "../lib/markdown-lint-fix.mjs";
 import { findLiteralMatches } from "../lib/text-search.mjs";
+import { getPreferredLanguage } from "../lib/language-preference.mjs";
 import {
   SourceEditor,
   type SourceDiagnostic,
@@ -23,7 +24,7 @@ import {
 
 const STORAGE_KEY = "openreview-live-renderer:draft:v1";
 const SYNC_MODE_KEY = "openreview-live-renderer:sync-mode:v1";
-const LANGUAGE_KEY = "openreview-live-preview:language:v1";
+const LANGUAGE_KEY = "openreview-live-preview:language:v2";
 const NOTICE_KEY = "openreview-live-preview:notice:v1";
 const SOURCE_URL = (
   process.env.NEXT_PUBLIC_SOURCE_URL?.trim() ||
@@ -470,6 +471,10 @@ export default function Editor() {
     const storedSyncMode = window.localStorage.getItem(SYNC_MODE_KEY);
     const storedLanguage = window.localStorage.getItem(LANGUAGE_KEY);
     const noticeAccepted = window.localStorage.getItem(NOTICE_KEY) === "accepted";
+    const browserLanguages =
+      navigator.languages.length > 0
+        ? navigator.languages
+        : [navigator.language];
     queueMicrotask(() => {
       const isOldStarterExample =
         stored?.startsWith("## Summary\n\nThis is an **OpenReview-compatible**") &&
@@ -482,9 +487,11 @@ export default function Editor() {
       ) {
         setSyncMode(storedSyncMode);
       }
-      if (storedLanguage === "zh" || storedLanguage === "en") {
-        setLanguage(storedLanguage);
-      }
+      setLanguage(
+        storedLanguage === "zh" || storedLanguage === "en"
+          ? storedLanguage
+          : getPreferredLanguage(browserLanguages),
+      );
       setNoticeOpen(!noticeAccepted);
       setDraftLoaded(true);
       setSanitizationReady(true);
@@ -503,9 +510,7 @@ export default function Editor() {
 
   useEffect(() => {
     document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
-    if (!draftLoaded) return;
-    window.localStorage.setItem(LANGUAGE_KEY, language);
-  }, [draftLoaded, language]);
+  }, [language]);
 
   useEffect(() => {
     if (!moreMenuOpen) return;
@@ -1252,6 +1257,14 @@ export default function Editor() {
     setNoticeOpen(false);
   };
 
+  const toggleLanguage = () => {
+    setLanguage((current) => {
+      const nextLanguage = current === "zh" ? "en" : "zh";
+      window.localStorage.setItem(LANGUAGE_KEY, nextLanguage);
+      return nextLanguage;
+    });
+  };
+
   return (
     <div className="appShell">
       <header className="topbar">
@@ -1379,9 +1392,7 @@ export default function Editor() {
                   aria-label={ui.switchLanguage}
                   onClick={() => {
                     setMoreMenuOpen(false);
-                    setLanguage((current) =>
-                      current === "zh" ? "en" : "zh",
-                    );
+                    toggleLanguage();
                   }}
                 >
                   {language === "zh" ? "English" : "中文"}
