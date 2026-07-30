@@ -23,6 +23,7 @@ loaded from the same jsDelivr URL used by OpenReview.
 This is an independent, unofficial tool. It is not affiliated with, authorized
 by, or endorsed by OpenReview.
 
+[Live demo](https://openreview-live.youtupi.me/) ·
 [Source code](https://github.com/sharpshark73/openreview-live-preview) ·
 [License](./LICENSE.md) ·
 [Third-party notices](./THIRD_PARTY_NOTICES.md)
