@@ -4,6 +4,7 @@ import test from "node:test";
 import DOMPurify from "isomorphic-dompurify";
 import { lintAndFixMarkdown } from "../lib/markdown-lint-fix.mjs";
 import {
+  findMarkdownEmphasisEffects,
   findSourceMarkdownMath,
   lintOpenReviewMarkdown,
 } from "../lib/markdown-warnings.mjs";
@@ -24,8 +25,10 @@ import {
 import {
   analyzeFormulaPipeline,
   decodeMarkdownBackslashEscapes,
+  protectFormulaMarkdownEmphasis,
   shouldShowFormulaDiagnostic,
 } from "../lib/formula-pipeline-analysis.mjs";
+import { getFormulaDiagnosticMessage } from "../lib/formula-diagnostic-message.mjs";
 import {
   isLostMathDelimiterEnabled,
   parseReminderSettings,
@@ -212,6 +215,7 @@ test("finds the formulas MathJax receives after Markdown rendering", () => {
     1,
   );
   assert.equal(findPostMarkdownMath("\\$not math$").length, 0);
+
 });
 
 test("pairs rendered formulas with source Markdown and highlights changes", () => {
@@ -311,6 +315,134 @@ test("classifies formula changes at the Markdown-to-MathJax boundary", () => {
   assert.equal(shouldShowFormulaDiagnostic(lostDelimiter, "errors"), true);
 });
 
+test("formula diagnostics separate real TeX changes from transport escapes", () => {
+  const [mixedChange] = analyzeFormulaPipeline(
+    findSourceMarkdownMath("$a\\!b\\_c\\_d$"),
+    findPostMarkdownMath("$a!b_c_d$"),
+  );
+  assert.deepEqual(mixedChange.details, ["\\!"]);
+  assert.deepEqual(mixedChange.ignoredDetails, ["\\_", "\\_"]);
+  assert.deepEqual(
+    mixedChange.transformations.map(({ escape, severity }) => ({
+      escape,
+      severity,
+    })),
+    [
+      { escape: "\\!", severity: "warning" },
+      { escape: "\\_", severity: "debug" },
+      { escape: "\\_", severity: "debug" },
+    ],
+  );
+
+  const warning = getFormulaDiagnosticMessage(mixedChange, "zh");
+  assert.match(warning, /负细空格命令会变成感叹号/);
+  assert.equal(warning.includes("\\_"), false);
+  assert.equal(warning.includes("\\\\!"), true);
+  assert.equal(warning.includes(mixedChange.renderedMath), false);
+
+  const [underscoreTransport] = analyzeFormulaPipeline(
+    findSourceMarkdownMath("$a\\_b$"),
+    findPostMarkdownMath("$a_b$"),
+  );
+  const debugMessage = getFormulaDiagnosticMessage(underscoreTransport, "zh");
+  assert.match(debugMessage, /通常正是 OpenReview 所需的兼容写法/);
+  assert.match(debugMessage, /无需修改/);
+
+  const [preservedSpacing] = analyzeFormulaPipeline(
+    findSourceMarkdownMath(String.raw`$a\\!b$`),
+    findPostMarkdownMath(String.raw`$a\!b$`),
+  );
+  assert.equal(preservedSpacing.severity, "debug");
+  assert.equal(
+    shouldShowFormulaDiagnostic(preservedSpacing, "recommended"),
+    false,
+  );
+  assert.deepEqual(preservedSpacing.transformations, [
+    {
+      escape: "\\\\!",
+      output: "\\!",
+      offset: 1,
+      kind: "protected-tex-command",
+      severity: "debug",
+    },
+  ]);
+  const preservedMessage = getFormulaDiagnosticMessage(
+    preservedSpacing,
+    "zh",
+  );
+  assert.match(preservedMessage, /保留该 TeX 命令的正确写法/);
+  assert.match(preservedMessage, /无需修改/);
+  assert.doesNotMatch(preservedMessage, /换行命令|要保留/);
+});
+
+test("confirms cross-formula Markdown emphasis with a block counterfactual", () => {
+  const sourceText = String.raw`$\mathcal{I}_{S}$ and $\\mathcal{I}_{C}$ denote tokens, while $\mathbf{h}_i$ and $i$ remain intact.`;
+  const sourceFormulas = findSourceMarkdownMath(sourceText);
+  const emphasisEffects = findMarkdownEmphasisEffects(sourceText);
+  assert.deepEqual(
+    emphasisEffects.map(({ marker, markerOffsets }) => ({
+      marker,
+      markerOffsets,
+    })),
+    [{
+      marker: "_",
+      markerOffsets: [12, 35],
+    }],
+  );
+  const protectedEmphasis = protectFormulaMarkdownEmphasis(
+    sourceText,
+    sourceFormulas,
+    emphasisEffects.flatMap(({ markerOffsets }) => markerOffsets),
+  );
+  assert.equal(
+    protectedEmphasis.value,
+    String.raw`$\mathcal{I}\_{S}$ and $\\mathcal{I}\_{C}$ denote tokens, while $\mathbf{h}_i$ and $i$ remain intact.`,
+  );
+
+  const baselineRendered = [
+    { math: " and ", display: false },
+    { math: " denote tokens, while ", display: false },
+    { math: " and ", display: false },
+  ];
+  const counterfactualRendered = [
+    { math: String.raw`\mathcal{I}_{S}`, display: false },
+    { math: String.raw`\mathcal{I}_{C}`, display: false },
+    { math: String.raw`\mathbf{h}_i`, display: false },
+    { math: "i", display: false },
+  ];
+  const analyses = analyzeFormulaPipeline(sourceFormulas, baselineRendered, {
+    emphasisCounterfactual: {
+      protectedOffsets: protectedEmphasis.protectedOffsets,
+      renderedFormulas: counterfactualRendered,
+    },
+  });
+
+  assert.equal(analyses[0].cause, "markdown-emphasis-interruption");
+  assert.equal(analyses[1].cause, "markdown-emphasis-interruption");
+  assert.ok(analyses.every(({ status }) => status === "lost"));
+  assert.ok(
+    analyses.every(({ renderedIndex }) => renderedIndex === undefined),
+  );
+  assert.equal(analyses[0].emphasisGroup.id, analyses[1].emphasisGroup.id);
+  assert.equal(analyses[0].emphasisGroup.affectedFormulaCount, 2);
+  assert.equal(analyses[2].cause, "markdown-emphasis-interruption");
+  assert.equal(analyses[3].cause, "markdown-emphasis-interruption");
+  assert.equal(analyses[2].emphasisGroup.id, analyses[0].emphasisGroup.id);
+  assert.equal(analyses[3].emphasisGroup.id, analyses[0].emphasisGroup.id);
+  assert.deepEqual(
+    analyses[1].causes.map(({ code }) => code),
+    ["markdown-emphasis-interruption", "markdown-backslash-escape"],
+  );
+  assert.deepEqual(
+    analyses[1].transformations.map(({ escape }) => escape),
+    ["\\\\"],
+  );
+  assert.match(
+    getFormulaDiagnosticMessage(analyses[0], "zh"),
+    /跨公式配成了一段强调标记.*分隔符错配/,
+  );
+});
+
 test("finds source formulas but ignores Markdown code regions", () => {
   const source = [
     "$x$",
@@ -394,6 +526,14 @@ test("ships the Markdown-stage formula inspector", async () => {
     2,
   );
   assert.match(editorSource, /annotateLostSourceMath/);
+  assert.match(editorSource, /markdownFormulaIssueBlock/);
+  assert.match(editorSource, /annotateFinalFormulaDiagnostics/);
+  assert.match(editorSource, /finalFormulaDiagnosticsRef/);
+  assert.match(editorSource, /openreviewFinalDiagnosticId/);
+  assert.match(editorSource, /finalWarningsIgnored/);
+  assert.match(editorSource, /ignoreWarnings/);
+  assert.match(editorSource, /viewInDebug/);
+  assert.match(editorSource, /pendingDebugNavigationRef/);
   assert.match(editorSource, /markdownLostMathCandidatesRef/);
   assert.match(editorSource, /HTMLDomStrings/);
   assert.match(editorSource, /previewDebugPanel/);
@@ -433,6 +573,11 @@ test("ships the Markdown-stage formula inspector", async () => {
   assert.match(editorSource, /Differs from original Markdown/);
   assert.match(styles, /\.markdownMathCandidate/);
   assert.match(styles, /\.markdownLostMathCandidate/);
+  assert.match(styles, /\.markdownFormulaIssueBlock/);
+  assert.match(styles, /\.finalFormulaDiagnosticBlock/);
+  assert.match(styles, /\.finalFormulaDiagnosticWarningBlock/);
+  assert.match(styles, /\.previewWarningToggle/);
+  assert.match(styles, /\.mathErrorTooltipDebugButton/);
   assert.match(styles, /\.markdownLostMathExplanation/);
   assert.match(styles, /\.markdownMathTooltipOutput/);
   assert.match(styles, /\.markdownMathTooltipError/);

@@ -683,6 +683,12 @@ a:focus {
   outline: 0;
 }
 
+.previewWarningToggle[aria-pressed="true"] {
+  color: #fff;
+  background: #77736d;
+  border-color: #77736d;
+}
+
 .findBar {
   position: fixed;
   z-index: 60;
@@ -861,12 +867,45 @@ a:focus {
   outline: 0;
 }
 
-.warningPanel button span {
-  display: block;
-  margin-bottom: 2px;
+.warningMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.warningLocation {
   color: #8a6500;
   font-size: 0.62rem;
   font-weight: 700;
+}
+
+.diagnosticBadge {
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.diagnosticBadge.error {
+  color: #8c1b13;
+  background: #fde9e7;
+}
+
+.diagnosticBadge.warning {
+  color: #795600;
+  background: #fff1b8;
+}
+
+.diagnosticBadge.info {
+  color: #315d6c;
+  background: #e6f1f4;
+}
+
+.warningMessage {
+  display: block;
 }
 
 .sourceEditorWrap {
@@ -1383,6 +1422,80 @@ a:focus {
   cursor: help;
 }
 
+.markdownStagePreview .markdownFormulaIssueBlock {
+  position: relative;
+  max-width: 100%;
+  padding-inline-end: 28px;
+  background: rgba(255, 243, 225, 0.48);
+  outline-style: solid;
+}
+
+.markdownStagePreview .markdownFormulaIssueBlock::after,
+.finalFormulaDiagnosticBlock::after {
+  position: absolute;
+  top: -8px;
+  right: 4px;
+  display: grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  color: #fff;
+  background: var(--or-red);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(90, 22, 16, 0.24);
+  content: "!";
+  font-size: 0.65rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.markdown-rendered .finalFormulaDiagnosticBlock {
+  position: relative;
+  max-width: 100%;
+  padding-inline-end: 28px;
+  outline-offset: 3px;
+  cursor: help;
+}
+
+.markdown-rendered .finalFormulaDiagnosticErrorBlock {
+  background: rgba(253, 233, 231, 0.34);
+  outline: 2px solid rgba(140, 27, 19, 0.66);
+}
+
+.markdown-rendered .finalFormulaDiagnosticErrorBlock:hover,
+.markdown-rendered .finalFormulaDiagnosticErrorBlock:focus-visible {
+  background: rgba(253, 233, 231, 0.58);
+  outline-color: var(--or-red);
+}
+
+.markdown-rendered .finalFormulaDiagnosticWarningBlock {
+  background: rgba(255, 244, 199, 0.38);
+  outline: 2px solid rgba(138, 101, 0, 0.62);
+}
+
+.markdown-rendered .finalFormulaDiagnosticWarningBlock:hover,
+.markdown-rendered .finalFormulaDiagnosticWarningBlock:focus-visible {
+  background: rgba(255, 244, 199, 0.62);
+  outline-color: #8a6500;
+}
+
+.finalFormulaDiagnosticWarningBlock::after {
+  background: #8a6500;
+}
+
+.finalFormulaDiagnosticTooltip {
+  border-top-color: var(--or-red);
+}
+
+.finalFormulaDiagnosticTooltip.warning {
+  border-top-color: #8a6500;
+}
+
+.finalFormulaDiagnosticTooltip.warning .mathErrorTooltipHeader {
+  color: #795600;
+}
+
 .mathErrorTooltip {
   position: fixed;
   z-index: 100;
@@ -1616,10 +1729,34 @@ a:focus {
 }
 
 .mathErrorTooltipHeader {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 7px 10px 6px;
   color: var(--or-red);
   border-bottom: 1px solid #e3e5e7;
   font-weight: 700;
+}
+
+.mathErrorTooltipDebugButton {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  color: var(--or-blue-dark);
+  background: #f5f8f9;
+  border: 1px solid #b9c7cc;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.mathErrorTooltipDebugButton:hover,
+.mathErrorTooltipDebugButton:focus-visible {
+  color: #fff;
+  background: var(--or-blue-dark);
+  border-color: var(--or-blue-dark);
+  outline: 0;
 }
 
 .mathErrorTooltipContent {

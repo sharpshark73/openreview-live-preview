@@ -13,6 +13,7 @@ import {
   renderOpenReviewMarkdownWithAnchors,
 } from "../lib/openreview-renderer.mjs";
 import {
+  findMarkdownEmphasisEffects,
   findSourceMarkdownMath,
   lintOpenReviewMarkdown,
 } from "../lib/markdown-warnings.mjs";
@@ -31,8 +32,10 @@ import {
 } from "../lib/formula-diff.mjs";
 import {
   analyzeFormulaPipeline,
+  protectFormulaMarkdownEmphasis,
   shouldShowFormulaDiagnostic,
 } from "../lib/formula-pipeline-analysis.mjs";
+import { getFormulaDiagnosticMessage } from "../lib/formula-diagnostic-message.mjs";
 import {
   DEFAULT_REMINDER_SETTINGS,
   isLostMathDelimiterEnabled,
@@ -104,6 +107,29 @@ type FormulaAnalysis = {
   confidence: "high" | "low";
   severity: "none" | "error" | "warning" | "debug";
   details: string[];
+  ignoredDetails: string[];
+  transformations: Array<{
+    escape: string;
+    output: string;
+    offset: number;
+    kind: "markdown-escape" | "protected-tex-command";
+    severity: "warning" | "debug";
+  }>;
+  causes: Array<{
+    code: string;
+    confidence: "high" | "low";
+    severity: "none" | "error" | "warning" | "debug";
+    details: string[];
+    sourceStart: number;
+    sourceEnd: number;
+    groupId?: string;
+  }>;
+  emphasisGroup?: {
+    id: string;
+    sourceStart: number;
+    sourceEnd: number;
+    affectedFormulaCount: number;
+  };
 };
 type AnchoredFormulaAnalysis = FormulaAnalysis & {
   anchor: HTMLElement;
@@ -133,10 +159,16 @@ const UI_TEXT = {
     previewStage: "预览阶段",
     finalPreview: "最终",
     markdownPreview: "Markdown",
+    ignoreWarnings: "忽略警告",
+    showWarnings: "显示警告",
+    ignoreWarningsTitle: "临时隐藏正式预览中的诊断标记",
+    showWarningsTitle: "重新显示正式预览中的诊断标记",
+    viewInDebug: "在 Debug 模式查看",
     markdownMathInput: "Markdown 后的 MathJax 输入",
     originalMarkdownMath: "Markdown 原文中的公式",
     markdownMathMismatch: "与原 Markdown 不一致",
     formulaPreview: "单公式预览",
+    formulaDiagnosticTitle: "公式诊断",
     lostMathTitle: "公式在 Markdown 阶段丢失",
     lostMathResult: "Markdown 后的结构",
     lostMathReason: "原因",
@@ -162,6 +194,9 @@ const UI_TEXT = {
     unsupported: "不支持",
     markdownWarning: "诊断提醒",
     warningCount: (count: number) => `${count} 条诊断提醒`,
+    diagnosticError: "错误",
+    diagnosticWarning: "警告",
+    diagnosticInfo: "信息",
     warningLocation: (line: number, column: number) =>
       `第 ${line} 行，第 ${column} 列`,
     sourceFindTitle: "查找与替换（Ctrl/⌘+F）",
@@ -182,7 +217,8 @@ const UI_TEXT = {
     recommendedLevelDescription:
       "额外提示高置信度、可能改变公式含义的问题。",
     allLevel: "全部诊断",
-    allLevelDescription: "包括不确定的输入变化，适合排查疑难问题。",
+    allLevelDescription:
+      "还会显示 \\_→_ 等通常正常的兼容传递，仅供排查。",
     markdownWarningsSetting: "Markdown 格式提醒",
     markdownWarningsDescription:
       "显示编辑器警告标记和左侧警告列表。",
@@ -237,10 +273,16 @@ const UI_TEXT = {
     previewStage: "Preview stage",
     finalPreview: "Final",
     markdownPreview: "Markdown",
+    ignoreWarnings: "Ignore warnings",
+    showWarnings: "Show warnings",
+    ignoreWarningsTitle: "Temporarily hide diagnostics in the final preview",
+    showWarningsTitle: "Show diagnostics in the final preview again",
+    viewInDebug: "View in Debug mode",
     markdownMathInput: "MathJax input after Markdown",
     originalMarkdownMath: "Formula in the original Markdown",
     markdownMathMismatch: "Differs from original Markdown",
     formulaPreview: "Formula preview",
+    formulaDiagnosticTitle: "Formula diagnostic",
     lostMathTitle: "Formula lost during Markdown rendering",
     lostMathResult: "Structure after Markdown",
     lostMathReason: "Reason",
@@ -267,6 +309,9 @@ const UI_TEXT = {
     markdownWarning: "Diagnostics",
     warningCount: (count: number) =>
       `${count} diagnostic${count === 1 ? "" : "s"}`,
+    diagnosticError: "Error",
+    diagnosticWarning: "Warning",
+    diagnosticInfo: "Info",
     warningLocation: (line: number, column: number) =>
       `Line ${line}, column ${column}`,
     sourceFindTitle: "Find and replace (Ctrl/⌘+F)",
@@ -289,7 +334,7 @@ const UI_TEXT = {
       "Also report high-confidence changes that may alter formula meaning.",
     allLevel: "All diagnostics",
     allLevelDescription:
-      "Include uncertain input changes for difficult debugging cases.",
+      "Also show normally safe transport changes such as \\_→_, for debugging only.",
     markdownWarningsSetting: "Markdown formatting warnings",
     markdownWarningsDescription:
       "Show editor diagnostics and the warning list above the source.",
@@ -562,7 +607,20 @@ type MarkdownLostMathCandidate = {
   id: string;
   markdownHtml: string;
   originalSource: string;
+  reason?: string;
+  showMarkdownResult?: boolean;
   suggestion: string;
+};
+
+type FinalFormulaDiagnosticCandidate = {
+  id: string;
+  message: string;
+  originalSource: string;
+  severity: "error" | "warning";
+  sourceEnd: number;
+  sourceStart: number;
+  suggestion: string;
+  title: string;
 };
 
 function collectPostMarkdownText(container: HTMLElement) {
@@ -669,10 +727,40 @@ function analyzeRenderedMathByElement(
     const sourceFormulas = findSourceMarkdownMath(
       sourceText.slice(sourceStart, sourceEnd),
     );
+    const sourceBlock = sourceText.slice(sourceStart, sourceEnd);
+    const emphasisEffects = findMarkdownEmphasisEffects(sourceBlock);
+    const relevantEmphasisOffsets = emphasisEffects
+      .filter((effect) =>
+        effect.markerOffsets.some((offset: number) =>
+          sourceFormulas.some(
+            (formula) =>
+              offset >= formula.contentStart && offset < formula.contentEnd,
+          ),
+        ),
+      )
+      .flatMap((effect) => effect.markerOffsets);
+    const protectedEmphasis = protectFormulaMarkdownEmphasis(
+      sourceBlock,
+      sourceFormulas,
+      relevantEmphasisOffsets,
+    );
+    let emphasisCounterfactual;
+    if (protectedEmphasis.protectedOffsets.length > 0) {
+      const counterfactualContainer = document.createElement("div");
+      counterfactualContainer.innerHTML = String(
+        parseOpenReviewMarkdown(protectedEmphasis.value),
+      );
+      emphasisCounterfactual = {
+        protectedOffsets: protectedEmphasis.protectedOffsets,
+        renderedFormulas: findPostMarkdownMath(
+          collectPostMarkdownText(counterfactualContainer).value,
+        ),
+      };
+    }
     const blockAnalyses = analyzeFormulaPipeline(
       sourceFormulas,
       formulas,
-      { sourceOffset: sourceStart },
+      { sourceOffset: sourceStart, emphasisCounterfactual },
     );
     for (const rawAnalysis of blockAnalyses) {
       const analysis = rawAnalysis as FormulaAnalysis;
@@ -713,45 +801,44 @@ function analyzeMarkdownHtmlFormulas(html: string, sourceText: string) {
   return analyzeRenderedMathByElement(container, sourceText, rendered).analyses;
 }
 
-function getFormulaDiagnosticMessage(
+function getBackslashEscapeWarnings(
   analysis: FormulaAnalysis,
+  level: DiagnosticLevel,
   language: Language,
 ) {
-  const removed = analysis.details.join(", ");
-  if (language === "en") {
-    if (analysis.cause === "markdown-backslash-escape") {
-      return `Markdown removes ${removed || "a backslash escape"} before MathJax; MathJax receives “${analysis.renderedMath ?? ""}”.`;
-    }
-    if (analysis.cause === "markdown-delimiter-removed") {
-      return `Markdown removes the ${analysis.open}…${analysis.close} delimiters before MathJax can recognize this formula.`;
-    }
-    if (analysis.cause === "markdown-emphasis-interruption") {
-      return "Markdown emphasis parsing breaks this formula before MathJax can recognize it.";
-    }
-    if (analysis.cause === "formula-lost-after-markdown") {
-      return "This source formula is no longer recognizable after Markdown rendering.";
-    }
-    if (analysis.cause === "markdown-html-entity") {
-      return `Markdown decodes an HTML entity before MathJax; MathJax receives “${analysis.renderedMath ?? ""}”.`;
-    }
-    return `MathJax receives “${analysis.renderedMath ?? ""}” instead of the source formula text.`;
+  if (level === "errors") return [];
+  const groups = new Map<
+    string,
+    typeof analysis.transformations
+  >();
+  for (const transformation of analysis.transformations) {
+    if (transformation.severity === "debug" && level !== "all") continue;
+    const key = `${transformation.severity}:${transformation.escape}`;
+    const group = groups.get(key) ?? [];
+    group.push(transformation);
+    groups.set(key, group);
   }
-  if (analysis.cause === "markdown-backslash-escape") {
-    return `Markdown 会在 MathJax 之前删除 ${removed || "反斜杠转义"}；MathJax 实际收到“${analysis.renderedMath ?? ""}”。`;
-  }
-  if (analysis.cause === "markdown-delimiter-removed") {
-    return `Markdown 会先删除 ${analysis.open}…${analysis.close} 分隔符，MathJax 因而无法识别这段公式。`;
-  }
-  if (analysis.cause === "markdown-emphasis-interruption") {
-    return "Markdown 的强调语法会先拆开这段公式，导致 MathJax 无法识别。";
-  }
-  if (analysis.cause === "formula-lost-after-markdown") {
-    return "这段源公式经过 Markdown 后已无法被 MathJax 识别。";
-  }
-  if (analysis.cause === "markdown-html-entity") {
-    return `Markdown 会在 MathJax 之前解码 HTML 实体；MathJax 实际收到“${analysis.renderedMath ?? ""}”。`;
-  }
-  return `MathJax 实际收到“${analysis.renderedMath ?? ""}”，与源公式文本不同。`;
+
+  return Array.from(groups.values(), (transformations): DisplayedWarning => {
+    const first = transformations[0];
+    const severity = first.severity === "warning" ? "warning" : "info";
+    const focusedAnalysis: FormulaAnalysis = {
+      ...analysis,
+      cause: "markdown-backslash-escape",
+      severity: first.severity,
+      details: transformations.map(({ escape }) => escape),
+      ignoredDetails: [],
+      transformations,
+    };
+    const start = analysis.sourceStart + analysis.open.length + first.offset;
+    return {
+      code: `formula-markdown-backslash-escape-${first.escape.charCodeAt(1)}`,
+      start,
+      end: start + first.escape.length,
+      message: getFormulaDiagnosticMessage(focusedAnalysis, language),
+      severity,
+    };
+  });
 }
 
 function collectVisibleText(container: HTMLElement) {
@@ -836,6 +923,7 @@ function annotateLostSourceMath(
   inputLabel: string,
   underscoreSuggestion: string,
   genericSuggestion: string,
+  language: Language,
 ) {
   if (!settings.enabled) {
     return new Map<string, MarkdownLostMathCandidate>();
@@ -862,6 +950,36 @@ function annotateLostSourceMath(
       block = block.nextElementSibling as HTMLElement | null;
     }
     if (!block) continue;
+
+    const emphasisAnalyses = lostFormulas.filter(
+      (formula) => formula.emphasisGroup,
+    );
+    if (emphasisAnalyses.length > 0) {
+      const id = `markdown-lost-math-${lostIndex}`;
+      lostIndex += 1;
+      const first = emphasisAnalyses[0];
+      const originalSource = emphasisAnalyses
+        .map((formula) =>
+          sourceText.slice(formula.sourceStart, formula.sourceEnd),
+        )
+        .filter((value, index, values) => values.indexOf(value) === index)
+        .join("  ·  ");
+      lostCandidates.set(id, {
+        id,
+        markdownHtml: "",
+        originalSource,
+        reason: getFormulaDiagnosticMessage(first, language),
+        showMarkdownResult: false,
+        suggestion: hasUnescapedUnderscore(originalSource)
+          ? underscoreSuggestion
+          : genericSuggestion,
+      });
+      block.classList.add("markdownLostMathBlock", "markdownFormulaIssueBlock");
+      block.dataset.markdownLostMathId = id;
+      block.tabIndex = 0;
+      block.setAttribute("aria-label", `${inputLabel}: ${originalSource}`);
+      continue;
+    }
 
     const visible = collectVisibleText(block);
     const pending: Array<{
@@ -960,6 +1078,7 @@ function annotatePostMarkdownMath(
   lostInputLabel: string,
   underscoreSuggestion: string,
   genericSuggestion: string,
+  language: Language,
 ) {
   const { value, segments } = collectPostMarkdownText(container);
   const candidates: MarkdownMathCandidate[] = findPostMarkdownMath(value).map(
@@ -1030,6 +1149,27 @@ function annotatePostMarkdownMath(
     sourceText,
     renderedReferences,
   );
+  const groupedAnchors = new Set(
+    formulaAnalysis.analyses
+      .filter(
+        (analysis) =>
+          analysis.emphasisGroup &&
+          isLostMathDelimiterEnabled(analysis.open, lostMathSettings),
+      )
+      .map((analysis) => analysis.anchor),
+  );
+  for (const anchor of groupedAnchors) {
+    let block = anchor.nextElementSibling as HTMLElement | null;
+    while (block?.classList.contains("source-anchor")) {
+      block = block.nextElementSibling as HTMLElement | null;
+    }
+    if (!block) continue;
+    for (const marker of block.querySelectorAll<HTMLElement>(
+      ".markdownMathCandidate",
+    )) {
+      marker.replaceWith(...Array.from(marker.childNodes));
+    }
+  }
   for (const candidate of candidates) {
     const marker = container.querySelector<HTMLElement>(
       `[data-markdown-math-id="${candidate.id}"]`,
@@ -1051,6 +1191,7 @@ function annotatePostMarkdownMath(
       lostInputLabel,
       underscoreSuggestion,
       genericSuggestion,
+      language,
     ),
   };
 }
@@ -1146,6 +1287,117 @@ function clearMathJaxErrorAnnotations(container: HTMLElement) {
     error.removeAttribute("tabindex");
     error.removeAttribute("aria-label");
   }
+}
+
+function clearFinalFormulaDiagnostics(container: HTMLElement) {
+  for (const block of container.querySelectorAll<HTMLElement>(
+    ".finalFormulaDiagnosticBlock",
+  )) {
+    delete block.dataset.openreviewFinalDiagnosticId;
+    block.classList.remove(
+      "finalFormulaDiagnosticBlock",
+      "finalFormulaDiagnosticErrorBlock",
+      "finalFormulaDiagnosticWarningBlock",
+    );
+    block.removeAttribute("tabindex");
+    block.removeAttribute("aria-label");
+  }
+}
+
+function annotateFinalFormulaDiagnostics(
+  container: HTMLElement,
+  analyses: FormulaAnalysis[],
+  sourceText: string,
+  settings: ReminderSettings,
+  language: Language,
+  title: string,
+  underscoreSuggestion: string,
+  genericSuggestion: string,
+  diagnosticTitle: string,
+) {
+  clearFinalFormulaDiagnostics(container);
+  const byBlock = new Map<HTMLElement, FormulaAnalysis[]>();
+  const anchors = Array.from(
+    container.querySelectorAll<HTMLElement>(":scope > .source-anchor"),
+  );
+  for (const analysis of analyses) {
+    if (
+      (analysis.severity !== "error" && analysis.severity !== "warning") ||
+      !shouldShowFormulaDiagnostic(analysis, settings.diagnosticLevel) ||
+      (analysis.status === "lost" &&
+        !isLostMathDelimiterEnabled(analysis.open, settings.lostMath))
+    ) {
+      continue;
+    }
+    const anchor = anchors.find((candidate) => {
+      const start = Number(candidate.dataset.sourceStart ?? 0);
+      const end = Number(candidate.dataset.sourceEnd ?? start);
+      return analysis.sourceStart >= start && analysis.sourceStart < end;
+    });
+    let block = anchor?.nextElementSibling as HTMLElement | null | undefined;
+    while (block?.classList.contains("source-anchor")) {
+      block = block.nextElementSibling as HTMLElement | null;
+    }
+    if (!block) continue;
+    const group = byBlock.get(block) ?? [];
+    group.push(analysis);
+    byBlock.set(block, group);
+  }
+
+  const candidates = new Map<string, FinalFormulaDiagnosticCandidate>();
+  let index = 0;
+  for (const [block, blockAnalyses] of byBlock) {
+    const id = `final-formula-diagnostic-${index}`;
+    index += 1;
+    const originalSource = blockAnalyses
+      .map((analysis) =>
+        sourceText.slice(analysis.sourceStart, analysis.sourceEnd),
+      )
+      .filter((value, valueIndex, values) =>
+        values.indexOf(value) === valueIndex
+      )
+      .join("  ·  ");
+    const messages = blockAnalyses
+      .map((analysis) => getFormulaDiagnosticMessage(analysis, language))
+      .filter((value, valueIndex, values) =>
+        values.indexOf(value) === valueIndex
+      );
+    const severity = blockAnalyses.some(
+      (analysis) => analysis.severity === "error",
+    )
+      ? "error"
+      : "warning";
+    const hasLostFormula = blockAnalyses.some(
+      (analysis) => analysis.status === "lost",
+    );
+    candidates.set(id, {
+      id,
+      message: messages.join("\n"),
+      originalSource,
+      severity,
+      sourceEnd: Math.max(...blockAnalyses.map((analysis) => analysis.sourceEnd)),
+      sourceStart: Math.min(
+        ...blockAnalyses.map((analysis) => analysis.sourceStart),
+      ),
+      suggestion: hasUnescapedUnderscore(originalSource)
+        ? underscoreSuggestion
+        : genericSuggestion,
+      title: hasLostFormula ? title : diagnosticTitle,
+    });
+    block.classList.add(
+      "finalFormulaDiagnosticBlock",
+      severity === "error"
+        ? "finalFormulaDiagnosticErrorBlock"
+        : "finalFormulaDiagnosticWarningBlock",
+    );
+    block.dataset.openreviewFinalDiagnosticId = id;
+    block.tabIndex = 0;
+    block.setAttribute(
+      "aria-label",
+      `${hasLostFormula ? title : diagnosticTitle}: ${messages.join(" ")}`,
+    );
+  }
+  return candidates;
 }
 
 function getMathJaxErrorMessage(error: Element) {
@@ -1308,6 +1560,7 @@ export default function Editor() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [debugMenuOpen, setDebugMenuOpen] = useState(false);
+  const [finalWarningsIgnored, setFinalWarningsIgnored] = useState(false);
   const [reminderSettings, setReminderSettings] =
     useState<ReminderSettings>(() =>
       parseReminderSettings(DEFAULT_REMINDER_SETTINGS),
@@ -1345,6 +1598,14 @@ export default function Editor() {
   const markdownLostMathCandidatesRef = useRef<
     Map<string, MarkdownLostMathCandidate>
   >(new Map());
+  const finalFormulaDiagnosticsRef = useRef<
+    Map<string, FinalFormulaDiagnosticCandidate>
+  >(new Map());
+  const pendingDebugNavigationRef = useRef<{
+    originalSource?: string;
+    renderedMath?: string;
+    sourceOffset: number;
+  } | null>(null);
   const markdownMathCacheRef = useRef<Map<string, Element>>(new Map());
   const lintUndoRef = useRef<string | null>(null);
   const findBarRef = useRef<HTMLElement>(null);
@@ -1390,6 +1651,7 @@ export default function Editor() {
   );
   const displayedWarnings = useMemo<DisplayedWarning[]>(() => {
     const warnings: DisplayedWarning[] = markdownWarnings.flatMap((warning) => {
+      if (warning.code === "markdown-emphasis-in-math") return [];
       const severity = MARKDOWN_ERROR_CODES.has(warning.code)
         ? "error"
         : "warning";
@@ -1398,13 +1660,8 @@ export default function Editor() {
         ? []
         : [{ ...warning, severity }];
     });
+    const reportedEmphasisGroups = new Set<string>();
     for (const analysis of formulaAnalyses) {
-      if (!shouldShowFormulaDiagnostic(
-        analysis,
-        reminderSettings.diagnosticLevel,
-      )) {
-        continue;
-      }
       if (analysis.status === "lost") {
         if (!isLostMathDelimiterEnabled(
           analysis.open,
@@ -1415,21 +1672,34 @@ export default function Editor() {
       } else if (!reminderSettings.markdownWarnings) {
         continue;
       }
-      if (
-        analysis.cause === "markdown-emphasis-interruption" &&
-        markdownWarnings.some(
-          (warning) =>
-            warning.code === "markdown-emphasis-in-math" &&
-            warning.start >= analysis.sourceStart &&
-            warning.end <= analysis.sourceEnd,
-        )
-      ) {
+      const escapeWarnings = getBackslashEscapeWarnings(
+        analysis,
+        reminderSettings.diagnosticLevel,
+        language,
+      );
+      if (analysis.cause === "markdown-backslash-escape") {
+        warnings.push(
+          ...escapeWarnings,
+        );
         continue;
+      }
+      if (!shouldShowFormulaDiagnostic(
+        analysis,
+        reminderSettings.diagnosticLevel,
+      )) {
+        continue;
+      }
+      if (analysis.emphasisGroup) {
+        if (reportedEmphasisGroups.has(analysis.emphasisGroup.id)) {
+          warnings.push(...escapeWarnings);
+          continue;
+        }
+        reportedEmphasisGroups.add(analysis.emphasisGroup.id);
       }
       warnings.push({
         code: `formula-${analysis.cause}`,
-        start: analysis.sourceStart,
-        end: analysis.sourceEnd,
+        start: analysis.emphasisGroup?.sourceStart ?? analysis.sourceStart,
+        end: analysis.emphasisGroup?.sourceEnd ?? analysis.sourceEnd,
         message: getFormulaDiagnosticMessage(analysis, language),
         severity:
           analysis.severity === "error"
@@ -1438,6 +1708,7 @@ export default function Editor() {
               ? "warning"
               : "info",
       });
+      warnings.push(...escapeWarnings);
     }
     return warnings
       .sort((left, right) => left.start - right.start)
@@ -1470,6 +1741,47 @@ export default function Editor() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [sanitizedHtml, text]);
+
+  useEffect(() => {
+    finalFormulaDiagnosticsRef.current.clear();
+    if (previewStage !== "final" || finalWarningsIgnored) return;
+    let annotatedContainer: HTMLElement | null = null;
+    const frame = window.requestAnimationFrame(() => {
+      const container = previewRef.current;
+      if (!container) return;
+      annotatedContainer = container;
+      finalFormulaDiagnosticsRef.current = annotateFinalFormulaDiagnostics(
+        container,
+        formulaAnalyses,
+        text,
+        reminderSettings,
+        language,
+        ui.lostMathTitle,
+        ui.lostMathUnderscoreHint,
+        ui.lostMathGenericHint,
+        ui.formulaDiagnosticTitle,
+      );
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (annotatedContainer) {
+        clearFinalFormulaDiagnostics(annotatedContainer);
+      }
+    };
+  }, [
+    formulaAnalyses,
+    finalWarningsIgnored,
+    language,
+    previewMode,
+    previewStage,
+    reminderSettings,
+    sanitizedHtml,
+    text,
+    ui.lostMathGenericHint,
+    ui.lostMathTitle,
+    ui.lostMathUnderscoreHint,
+    ui.formulaDiagnosticTitle,
+  ]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -1597,7 +1909,7 @@ export default function Editor() {
       .then(() => {
         if (!cancelled && container.isConnected) {
           clearMathJaxErrorAnnotations(container);
-          if (reminderSettings.mathJaxErrors) {
+          if (reminderSettings.mathJaxErrors && !finalWarningsIgnored) {
             annotateMathJaxErrors(
               container,
               language,
@@ -1622,6 +1934,7 @@ export default function Editor() {
     mathJaxState,
     previewMode,
     previewStage,
+    finalWarningsIgnored,
     language,
     reminderSettings.mathJaxErrors,
     text,
@@ -1648,6 +1961,7 @@ export default function Editor() {
         ui.lostMathTitle,
         ui.lostMathUnderscoreHint,
         ui.lostMathGenericHint,
+        language,
       );
       markdownMathCandidatesRef.current = annotations.recognized;
       markdownLostMathCandidatesRef.current = annotations.lost;
@@ -1664,6 +1978,7 @@ export default function Editor() {
     ui.lostMathTitle,
     ui.lostMathUnderscoreHint,
     ui.markdownMathInput,
+    language,
   ]);
 
   useEffect(() => {
@@ -2241,7 +2556,9 @@ export default function Editor() {
 
   const getMathErrorTarget = (target: EventTarget | null) =>
     target instanceof HTMLElement
-      ? target.closest<HTMLElement>("[data-openreview-math-error]")
+      ? target.closest<HTMLElement>(
+          "[data-openreview-math-error], [data-openreview-final-diagnostic-id]",
+        )
       : null;
 
   const hideMathErrorTooltip = () => {
@@ -2321,14 +2638,59 @@ export default function Editor() {
     tooltip.style.top = `${top}px`;
   };
 
+  const viewFinalIssueInDebug = (
+    target: HTMLElement,
+    diagnostic?: FinalFormulaDiagnosticCandidate,
+  ) => {
+    const container = previewRef.current;
+    const anchor = container
+      ? getSourceAnchorForElement(target, container)
+      : null;
+    const sourceOffset = diagnostic?.sourceStart ?? Number(
+      anchor?.dataset.sourceStart ?? 0,
+    );
+    pendingDebugNavigationRef.current = {
+      originalSource:
+        diagnostic?.originalSource ?? target.dataset.openreviewMathOriginal,
+      renderedMath: target.dataset.openreviewMathSource,
+      sourceOffset,
+    };
+    hideMathErrorTooltip();
+    setPreviewStage("markdown");
+  };
+
+  const createFinalIssueTooltipHeader = (
+    title: string,
+    target: HTMLElement,
+    diagnostic?: FinalFormulaDiagnosticCandidate,
+  ) => {
+    const header = document.createElement("div");
+    const heading = document.createElement("span");
+    const debugButton = document.createElement("button");
+    header.className = "mathErrorTooltipHeader";
+    heading.textContent = title;
+    debugButton.className = "mathErrorTooltipDebugButton";
+    debugButton.type = "button";
+    debugButton.textContent = ui.viewInDebug;
+    debugButton.addEventListener("click", () => {
+      viewFinalIssueInDebug(target, diagnostic);
+    });
+    header.append(heading, debugButton);
+    return header;
+  };
+
   const showMathErrorTooltip = (target: EventTarget | null) => {
-    if (!reminderSettings.mathJaxErrors) {
-      hideMathErrorTooltip();
-      return;
-    }
     const error = getMathErrorTarget(target);
+    const finalDiagnosticId =
+      error?.dataset.openreviewFinalDiagnosticId;
+    const finalDiagnostic = finalDiagnosticId
+      ? finalFormulaDiagnosticsRef.current.get(finalDiagnosticId)
+      : undefined;
     const message = error?.dataset.openreviewMathError;
-    if (!error || !message) {
+    if (
+      !error ||
+      (!finalDiagnostic && (!message || !reminderSettings.mathJaxErrors))
+    ) {
       hideMathErrorTooltip();
       return;
     }
@@ -2339,11 +2701,57 @@ export default function Editor() {
     if (!tooltip) return;
 
     mathErrorTargetRef.current = error;
+    if (finalDiagnostic) {
+      const header = createFinalIssueTooltipHeader(
+        finalDiagnostic.title,
+        error,
+        finalDiagnostic,
+      );
+      const content = document.createElement("div");
+      content.className = "mathErrorTooltipContent";
+
+      const sourceSection = document.createElement("section");
+      const sourceLabel = document.createElement("div");
+      const sourceCode = document.createElement("code");
+      sourceSection.className = "mathErrorTooltipSection";
+      sourceLabel.className = "mathErrorTooltipLabel";
+      sourceLabel.textContent = ui.originalMarkdownMath;
+      sourceCode.className = "mathErrorTooltipFormula";
+      sourceCode.textContent = finalDiagnostic.originalSource;
+      sourceSection.append(sourceLabel, sourceCode);
+
+      const messageSection = document.createElement("section");
+      const messageLabel = document.createElement("div");
+      const messageText = document.createElement("div");
+      messageSection.className =
+        "mathErrorTooltipSection markdownMathTooltipError";
+      messageLabel.className = "markdownMathTooltipErrorLabel";
+      messageLabel.textContent = ui.lostMathReason;
+      messageText.className =
+        "mathErrorTooltipMessage markdownMathTooltipErrorMessages";
+      messageText.textContent = finalDiagnostic.message;
+      messageSection.append(messageLabel, messageText);
+
+      const suggestionSection = document.createElement("section");
+      const suggestionLabel = document.createElement("div");
+      const suggestionText = document.createElement("div");
+      suggestionSection.className = "markdownLostMathExplanation";
+      suggestionLabel.className = "markdownLostMathExplanationLabel";
+      suggestionLabel.textContent = ui.lostMathSuggestion;
+      suggestionText.textContent = finalDiagnostic.suggestion;
+      suggestionSection.append(suggestionLabel, suggestionText);
+
+      content.append(sourceSection, messageSection, suggestionSection);
+      tooltip.replaceChildren(header, content);
+      tooltip.className =
+        `mathErrorTooltip finalFormulaDiagnosticTooltip ${finalDiagnostic.severity}`;
+      positionMathErrorTooltip(error, tooltip);
+      return;
+    }
+
     const formula = error.dataset.openreviewMathSource;
     const originalFormula = error.dataset.openreviewMathOriginal;
-    const header = document.createElement("div");
-    header.className = "mathErrorTooltipHeader";
-    header.textContent = ui.mathJaxError;
+    const header = createFinalIssueTooltipHeader(ui.mathJaxError, error);
 
     const content = document.createElement("div");
     content.className = "mathErrorTooltipContent";
@@ -2373,7 +2781,7 @@ export default function Editor() {
     messageLabel.textContent = ui.mathJaxMessage;
     messageText.className =
       "mathErrorTooltipMessage markdownMathTooltipErrorMessages";
-    messageText.textContent = message;
+    messageText.textContent = message ?? "";
     messageSection.append(messageLabel, messageText);
     content.append(messageSection);
 
@@ -2643,7 +3051,9 @@ export default function Editor() {
         ui.originalMarkdownMath,
         lostCandidate.originalSource,
       );
-      appendCodeSection(ui.lostMathResult, lostCandidate.markdownHtml);
+      if (lostCandidate.showMarkdownResult !== false) {
+        appendCodeSection(ui.lostMathResult, lostCandidate.markdownHtml);
+      }
 
       const explanation = document.createElement("section");
       explanation.className = "markdownLostMathExplanation";
@@ -2651,7 +3061,7 @@ export default function Editor() {
       reasonLabel.className = "markdownLostMathExplanationLabel";
       reasonLabel.textContent = ui.lostMathReason;
       const reason = document.createElement("div");
-      reason.textContent = ui.lostMathReasonText;
+      reason.textContent = lostCandidate.reason ?? ui.lostMathReasonText;
       const suggestionLabel = document.createElement("div");
       suggestionLabel.className = "markdownLostMathExplanationLabel";
       suggestionLabel.textContent = ui.lostMathSuggestion;
@@ -2803,6 +3213,48 @@ export default function Editor() {
       },
     }));
   };
+
+  useEffect(() => {
+    if (previewStage !== "markdown" || !pendingDebugNavigationRef.current) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const pending = pendingDebugNavigationRef.current;
+      const preview = previewRef.current;
+      const viewport = previewViewportRef.current;
+      if (!pending || !preview || !viewport) return;
+
+      const anchor = Array.from(
+        preview.querySelectorAll<HTMLElement>(":scope > .source-anchor"),
+      ).find((candidate) => {
+        const start = Number(candidate.dataset.sourceStart ?? 0);
+        const end = Number(candidate.dataset.sourceEnd ?? start);
+        return pending.sourceOffset >= start && pending.sourceOffset <= end;
+      });
+      let block = anchor?.nextElementSibling as HTMLElement | null | undefined;
+      while (block?.classList.contains("source-anchor")) {
+        block = block.nextElementSibling as HTMLElement | null;
+      }
+      pendingDebugNavigationRef.current = null;
+      if (!block) return;
+
+      const viewportRect = viewport.getBoundingClientRect();
+      const blockRect = block.getBoundingClientRect();
+      viewport.scrollTo({
+        top: Math.max(
+          0,
+          viewport.scrollTop +
+            blockRect.top -
+            viewportRect.top -
+            viewport.clientHeight / 2 +
+            blockRect.height / 2,
+        ),
+        behavior: "smooth",
+      });
+      flashPreviewTarget(block);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [language, previewMode, previewStage, reminderFingerprint, sourceFingerprint]);
 
   return (
     <div className="appShell">
@@ -3049,16 +3501,29 @@ export default function Editor() {
                                 ?.removeAttribute("open");
                           }}
                         >
-                          <span>
-                            {ui.warningLocation(
-                              location.line,
-                              location.column,
-                            )}
+                          <span className="warningMeta">
+                            <span className="warningLocation">
+                              {ui.warningLocation(
+                                location.line,
+                                location.column,
+                              )}
+                            </span>
+                            <span
+                              className={`diagnosticBadge ${warning.severity}`}
+                            >
+                              {warning.severity === "error"
+                                ? ui.diagnosticError
+                                : warning.severity === "warning"
+                                  ? ui.diagnosticWarning
+                                  : ui.diagnosticInfo}
+                            </span>
                           </span>
-                          {language === "en"
-                            ? ENGLISH_WARNING_MESSAGES[warning.code] ??
-                              warning.message
-                            : warning.message}
+                          <span className="warningMessage">
+                            {language === "en"
+                              ? ENGLISH_WARNING_MESSAGES[warning.code] ??
+                                warning.message
+                              : warning.message}
+                          </span>
                         </button>
                         );
                       })}
@@ -3195,14 +3660,36 @@ export default function Editor() {
                   </div>
                 </div>
               </div>
-              <button
-                className="paneFindButton"
-                type="button"
-                title={ui.previewFindTitle}
-                onClick={() => openSearch("preview")}
-              >
-                {ui.find}
-              </button>
+              <div className="paneHeaderActions">
+                {previewStage === "final" ? (
+                  <button
+                    className="paneFindButton previewWarningToggle"
+                    type="button"
+                    aria-pressed={finalWarningsIgnored}
+                    title={
+                      finalWarningsIgnored
+                        ? ui.showWarningsTitle
+                        : ui.ignoreWarningsTitle
+                    }
+                    onClick={() => {
+                      hideMathErrorTooltip();
+                      setFinalWarningsIgnored((current) => !current);
+                    }}
+                  >
+                    {finalWarningsIgnored
+                      ? ui.showWarnings
+                      : ui.ignoreWarnings}
+                  </button>
+                ) : null}
+                <button
+                  className="paneFindButton"
+                  type="button"
+                  title={ui.previewFindTitle}
+                  onClick={() => openSearch("preview")}
+                >
+                  {ui.find}
+                </button>
+              </div>
             </header>
 
             <div

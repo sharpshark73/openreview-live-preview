@@ -19,4 +19,11 @@ export type SourceMarkdownMathMatch = {
 export function findSourceMarkdownMath(
   value?: string,
 ): SourceMarkdownMathMatch[];
+export function findMarkdownEmphasisEffects(value?: string): Array<{
+  type: "em" | "strong";
+  start: number;
+  end: number;
+  marker: "_" | "*";
+  markerOffsets: number[];
+}>;
 export function lintOpenReviewMarkdown(value?: string): MarkdownWarning[];
