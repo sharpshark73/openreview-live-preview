@@ -7,6 +7,10 @@ export type FormulaInput = {
   display: boolean;
   math: string;
 };
+export type FormulaAlignment = {
+  originalIndex?: number;
+  renderedIndex?: number;
+};
 
 export function diffFormulaText(
   original?: string,
@@ -16,6 +20,10 @@ export function getFormulaDiffCost(
   original?: string,
   rendered?: string,
 ): number;
+export function alignFormulaInputs(
+  original?: FormulaInput[],
+  rendered?: FormulaInput[],
+): FormulaAlignment[];
 export function pairFormulaInputs(
   rendered?: FormulaInput[],
   original?: FormulaInput[],

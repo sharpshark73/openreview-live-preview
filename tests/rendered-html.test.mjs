@@ -14,12 +14,18 @@ import {
   POST_MARKDOWN_BLOCK_BOUNDARY,
 } from "../lib/post-markdown-math.mjs";
 import {
+  alignFormulaInputs,
   DIFF_DELETE,
   DIFF_INSERT,
   diffFormulaText,
   matchFormulaInputs,
   pairFormulaInputs,
 } from "../lib/formula-diff.mjs";
+import {
+  analyzeFormulaPipeline,
+  decodeMarkdownBackslashEscapes,
+  shouldShowFormulaDiagnostic,
+} from "../lib/formula-pipeline-analysis.mjs";
 import {
   isLostMathDelimiterEnabled,
   parseReminderSettings,
@@ -248,6 +254,61 @@ test("pairs rendered formulas with source Markdown and highlights changes", () =
     ),
     [1],
   );
+
+  assert.deepEqual(
+    alignFormulaInputs(
+      [
+        { math: "a", display: false },
+        { math: "missing", display: false },
+        { math: "c", display: false },
+      ],
+      [
+        { math: "a", display: false },
+        { math: "c", display: false },
+      ],
+    ),
+    [
+      { originalIndex: 0, renderedIndex: 0 },
+      { originalIndex: 1 },
+      { originalIndex: 2, renderedIndex: 1 },
+    ],
+  );
+});
+
+test("classifies formula changes at the Markdown-to-MathJax boundary", () => {
+  const source = findSourceMarkdownMath("$a\\!b$");
+  const rendered = findPostMarkdownMath("$a!b$");
+  const [spacingChange] = analyzeFormulaPipeline(source, rendered);
+
+  assert.equal(decodeMarkdownBackslashEscapes("a\\!b"), "a!b");
+  assert.equal(spacingChange.status, "changed");
+  assert.equal(spacingChange.cause, "markdown-backslash-escape");
+  assert.equal(spacingChange.severity, "warning");
+  assert.equal(shouldShowFormulaDiagnostic(spacingChange, "errors"), false);
+  assert.equal(
+    shouldShowFormulaDiagnostic(spacingChange, "recommended"),
+    true,
+  );
+
+  const [transportEscape] = analyzeFormulaPipeline(
+    findSourceMarkdownMath("$a\\_b$"),
+    findPostMarkdownMath("$a_b$"),
+  );
+  assert.equal(transportEscape.severity, "debug");
+  assert.equal(
+    shouldShowFormulaDiagnostic(transportEscape, "recommended"),
+    false,
+  );
+  assert.equal(shouldShowFormulaDiagnostic(transportEscape, "all"), true);
+
+  const [lostDelimiter] = analyzeFormulaPipeline(
+    findSourceMarkdownMath("\\(x\\)"),
+    [],
+  );
+  assert.equal(lostDelimiter.status, "lost");
+  assert.equal(lostDelimiter.cause, "markdown-delimiter-removed");
+  assert.equal(lostDelimiter.severity, "error");
+  assert.equal(shouldShowFormulaDiagnostic(lostDelimiter, "errors"), true);
 });
 
 test("finds source formulas but ignores Markdown code regions", () => {
@@ -273,6 +334,7 @@ test("finds source formulas but ignores Markdown code regions", () => {
 test("persists reminder settings and filters lost-formula delimiters", () => {
   const settings = parseReminderSettings(
     JSON.stringify({
+      diagnosticLevel: "all",
       markdownWarnings: false,
       mathJaxErrors: false,
       lostMath: {
@@ -285,6 +347,7 @@ test("persists reminder settings and filters lost-formula delimiters", () => {
     }),
   );
 
+  assert.equal(settings.diagnosticLevel, "all");
   assert.equal(settings.markdownWarnings, false);
   assert.equal(settings.mathJaxErrors, false);
   assert.equal(isLostMathDelimiterEnabled("$", settings.lostMath), false);
@@ -300,6 +363,10 @@ test("persists reminder settings and filters lost-formula delimiters", () => {
       inlineParen: true,
       displayBracket: true,
     },
+  );
+  assert.equal(
+    parseReminderSettings({ diagnosticLevel: "unknown" }).diagnosticLevel,
+    "recommended",
   );
   assert.equal(
     isLostMathDelimiterEnabled("$$", {

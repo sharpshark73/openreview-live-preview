@@ -45,6 +45,7 @@ export type SourceDiagnostic = {
   from: number;
   to: number;
   message: string;
+  severity?: "error" | "warning" | "info";
 };
 
 export type SourceEditorHandle = {
@@ -575,7 +576,7 @@ export const SourceEditor = forwardRef<
       return {
         from,
         to: Math.min(length, Math.max(from, diagnostic.to)),
-        severity: "warning",
+        severity: diagnostic.severity ?? "warning",
         message: diagnostic.message,
       };
     });

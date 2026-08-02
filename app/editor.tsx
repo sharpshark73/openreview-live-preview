@@ -28,9 +28,11 @@ import {
   DIFF_EQUAL,
   DIFF_INSERT,
   diffFormulaText,
-  matchFormulaInputs,
-  pairFormulaInputs,
 } from "../lib/formula-diff.mjs";
+import {
+  analyzeFormulaPipeline,
+  shouldShowFormulaDiagnostic,
+} from "../lib/formula-pipeline-analysis.mjs";
 import {
   DEFAULT_REMINDER_SETTINGS,
   isLostMathDelimiterEnabled,
@@ -70,6 +72,10 @@ type MarkdownWarning = {
   message: string;
   start: number;
 };
+type DisplayedWarning = MarkdownWarning & {
+  severity: "error" | "warning" | "info";
+};
+type DiagnosticLevel = "errors" | "recommended" | "all";
 type LostMathReminderSettings = {
   enabled: boolean;
   inlineDollar: boolean;
@@ -78,9 +84,29 @@ type LostMathReminderSettings = {
   displayBracket: boolean;
 };
 type ReminderSettings = {
+  diagnosticLevel: DiagnosticLevel;
   markdownWarnings: boolean;
   mathJaxErrors: boolean;
   lostMath: LostMathReminderSettings;
+};
+type FormulaAnalysis = {
+  sourceIndex: number;
+  renderedIndex?: number;
+  sourceStart: number;
+  sourceEnd: number;
+  sourceMath: string;
+  renderedMath?: string;
+  open: string;
+  close: string;
+  display: boolean;
+  status: "unchanged" | "changed" | "lost";
+  cause: string;
+  confidence: "high" | "low";
+  severity: "none" | "error" | "warning" | "debug";
+  details: string[];
+};
+type AnchoredFormulaAnalysis = FormulaAnalysis & {
+  anchor: HTMLElement;
 };
 
 const UI_TEXT = {
@@ -134,8 +160,8 @@ const UI_TEXT = {
     closeFind: "关闭查找",
     closeFindTitle: "关闭（Esc）",
     unsupported: "不支持",
-    markdownWarning: "Markdown 警告",
-    warningCount: (count: number) => `${count} 条 Markdown 警告`,
+    markdownWarning: "诊断提醒",
+    warningCount: (count: number) => `${count} 条诊断提醒`,
     warningLocation: (line: number, column: number) =>
       `第 ${line} 行，第 ${column} 列`,
     sourceFindTitle: "查找与替换（Ctrl/⌘+F）",
@@ -147,6 +173,16 @@ const UI_TEXT = {
     settings: "设置",
     settingsTitle: "提醒设置",
     settingsIntro: "这些选项仅保存在当前浏览器。",
+    diagnosticLevelSetting: "提醒级别",
+    diagnosticLevelDescription:
+      "控制诊断的敏感度；不会改变 OpenReview 渲染结果。",
+    errorsLevel: "仅错误",
+    errorsLevelDescription: "只提示公式丢失和确定无法渲染的问题。",
+    recommendedLevel: "推荐",
+    recommendedLevelDescription:
+      "额外提示高置信度、可能改变公式含义的问题。",
+    allLevel: "全部诊断",
+    allLevelDescription: "包括不确定的输入变化，适合排查疑难问题。",
     markdownWarningsSetting: "Markdown 格式提醒",
     markdownWarningsDescription:
       "显示编辑器警告标记和左侧警告列表。",
@@ -228,9 +264,9 @@ const UI_TEXT = {
     closeFind: "Close find",
     closeFindTitle: "Close (Esc)",
     unsupported: "Unsupported",
-    markdownWarning: "Markdown warning",
+    markdownWarning: "Diagnostics",
     warningCount: (count: number) =>
-      `${count} Markdown warning${count === 1 ? "" : "s"}`,
+      `${count} diagnostic${count === 1 ? "" : "s"}`,
     warningLocation: (line: number, column: number) =>
       `Line ${line}, column ${column}`,
     sourceFindTitle: "Find and replace (Ctrl/⌘+F)",
@@ -242,6 +278,18 @@ const UI_TEXT = {
     settings: "Settings",
     settingsTitle: "Reminder settings",
     settingsIntro: "These preferences are stored only in this browser.",
+    diagnosticLevelSetting: "Reminder level",
+    diagnosticLevelDescription:
+      "Controls diagnostic sensitivity without changing OpenReview rendering.",
+    errorsLevel: "Errors only",
+    errorsLevelDescription:
+      "Only report lost formulas and definite rendering failures.",
+    recommendedLevel: "Recommended",
+    recommendedLevelDescription:
+      "Also report high-confidence changes that may alter formula meaning.",
+    allLevel: "All diagnostics",
+    allLevelDescription:
+      "Include uncertain input changes for difficult debugging cases.",
     markdownWarningsSetting: "Markdown formatting warnings",
     markdownWarningsDescription:
       "Show editor diagnostics and the warning list above the source.",
@@ -296,6 +344,15 @@ const ENGLISH_WARNING_MESSAGES: Record<string, string> = {
   "indented-code":
     "Markdown interprets this four-space indentation as a code block",
 };
+
+const MARKDOWN_ERROR_CODES = new Set([
+  "multiline-inline-math",
+  "unclosed-fence",
+  "unmatched-display-math",
+  "unmatched-inline-math",
+  "unsafe-link",
+  "unsupported-image",
+]);
 
 type HighlightRegistryLike = {
   set: (name: string, highlight: unknown) => void;
@@ -584,7 +641,7 @@ function getSourceAnchorForElement(
   return anchor;
 }
 
-function mapOriginalMathByElement(
+function analyzeRenderedMathByElement(
   container: HTMLElement,
   sourceText: string,
   rendered: RenderedMathReference[],
@@ -602,21 +659,99 @@ function mapOriginalMathByElement(
   }
 
   const originalByElement = new Map<Element, string>();
-  for (const [anchor, formulas] of groups) {
+  const analyses: AnchoredFormulaAnalysis[] = [];
+  for (const anchor of container.querySelectorAll<HTMLElement>(
+    ":scope > .source-anchor",
+  )) {
+    const formulas = groups.get(anchor) ?? [];
     const sourceStart = Number(anchor.dataset.sourceStart ?? 0);
     const sourceEnd = Number(anchor.dataset.sourceEnd ?? sourceStart);
     const sourceFormulas = findSourceMarkdownMath(
       sourceText.slice(sourceStart, sourceEnd),
     );
-    const pairs = pairFormulaInputs(formulas, sourceFormulas);
-    pairs.forEach((originalMath, index) => {
-      if (originalMath !== undefined) {
-        originalByElement.set(formulas[index].element, originalMath);
+    const blockAnalyses = analyzeFormulaPipeline(
+      sourceFormulas,
+      formulas,
+      { sourceOffset: sourceStart },
+    );
+    for (const rawAnalysis of blockAnalyses) {
+      const analysis = rawAnalysis as FormulaAnalysis;
+      analyses.push({ ...analysis, anchor });
+      if (analysis.renderedIndex !== undefined) {
+        originalByElement.set(
+          formulas[analysis.renderedIndex].element,
+          analysis.sourceMath,
+        );
       }
-    });
+    }
   }
 
-  return originalByElement;
+  return { analyses, originalByElement };
+}
+
+function analyzeMarkdownHtmlFormulas(html: string, sourceText: string) {
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  const rendered: RenderedMathReference[] = [];
+  for (const anchor of container.querySelectorAll<HTMLElement>(
+    ":scope > .source-anchor",
+  )) {
+    let block = anchor.nextElementSibling as HTMLElement | null;
+    while (block?.classList.contains("source-anchor")) {
+      block = block.nextElementSibling as HTMLElement | null;
+    }
+    if (!block) continue;
+    const postMarkdownText = collectPostMarkdownText(block).value;
+    for (const formula of findPostMarkdownMath(postMarkdownText)) {
+      rendered.push({
+        display: formula.display,
+        element: block,
+        math: formula.math,
+      });
+    }
+  }
+  return analyzeRenderedMathByElement(container, sourceText, rendered).analyses;
+}
+
+function getFormulaDiagnosticMessage(
+  analysis: FormulaAnalysis,
+  language: Language,
+) {
+  const removed = analysis.details.join(", ");
+  if (language === "en") {
+    if (analysis.cause === "markdown-backslash-escape") {
+      return `Markdown removes ${removed || "a backslash escape"} before MathJax; MathJax receives “${analysis.renderedMath ?? ""}”.`;
+    }
+    if (analysis.cause === "markdown-delimiter-removed") {
+      return `Markdown removes the ${analysis.open}…${analysis.close} delimiters before MathJax can recognize this formula.`;
+    }
+    if (analysis.cause === "markdown-emphasis-interruption") {
+      return "Markdown emphasis parsing breaks this formula before MathJax can recognize it.";
+    }
+    if (analysis.cause === "formula-lost-after-markdown") {
+      return "This source formula is no longer recognizable after Markdown rendering.";
+    }
+    if (analysis.cause === "markdown-html-entity") {
+      return `Markdown decodes an HTML entity before MathJax; MathJax receives “${analysis.renderedMath ?? ""}”.`;
+    }
+    return `MathJax receives “${analysis.renderedMath ?? ""}” instead of the source formula text.`;
+  }
+  if (analysis.cause === "markdown-backslash-escape") {
+    return `Markdown 会在 MathJax 之前删除 ${removed || "反斜杠转义"}；MathJax 实际收到“${analysis.renderedMath ?? ""}”。`;
+  }
+  if (analysis.cause === "markdown-delimiter-removed") {
+    return `Markdown 会先删除 ${analysis.open}…${analysis.close} 分隔符，MathJax 因而无法识别这段公式。`;
+  }
+  if (analysis.cause === "markdown-emphasis-interruption") {
+    return "Markdown 的强调语法会先拆开这段公式，导致 MathJax 无法识别。";
+  }
+  if (analysis.cause === "formula-lost-after-markdown") {
+    return "这段源公式经过 Markdown 后已无法被 MathJax 识别。";
+  }
+  if (analysis.cause === "markdown-html-entity") {
+    return `Markdown 会在 MathJax 之前解码 HTML 实体；MathJax 实际收到“${analysis.renderedMath ?? ""}”。`;
+  }
+  return `MathJax 实际收到“${analysis.renderedMath ?? ""}”，与源公式文本不同。`;
 }
 
 function collectVisibleText(container: HTMLElement) {
@@ -696,7 +831,7 @@ function hasUnescapedUnderscore(value: string) {
 function annotateLostSourceMath(
   container: HTMLElement,
   sourceText: string,
-  rendered: RenderedMathReference[],
+  analyses: AnchoredFormulaAnalysis[],
   settings: LostMathReminderSettings,
   inputLabel: string,
   underscoreSuggestion: string,
@@ -706,45 +841,27 @@ function annotateLostSourceMath(
     return new Map<string, MarkdownLostMathCandidate>();
   }
 
-  const renderedByAnchor = new Map<
-    HTMLElement,
-    RenderedMathReference[]
-  >();
-  for (const formula of rendered) {
-    const anchor = getSourceAnchorForElement(formula.element, container);
-    if (!anchor) continue;
-    const group = renderedByAnchor.get(anchor) ?? [];
-    group.push(formula);
-    renderedByAnchor.set(anchor, group);
+  const lostByAnchor = new Map<HTMLElement, AnchoredFormulaAnalysis[]>();
+  for (const analysis of analyses) {
+    if (
+      analysis.status !== "lost" ||
+      !isLostMathDelimiterEnabled(analysis.open, settings)
+    ) {
+      continue;
+    }
+    const group = lostByAnchor.get(analysis.anchor) ?? [];
+    group.push(analysis);
+    lostByAnchor.set(analysis.anchor, group);
   }
 
   const lostCandidates = new Map<string, MarkdownLostMathCandidate>();
   let lostIndex = 0;
-  for (const anchor of container.querySelectorAll<HTMLElement>(
-    ":scope > .source-anchor",
-  )) {
+  for (const [anchor, lostFormulas] of lostByAnchor) {
     let block = anchor.nextElementSibling as HTMLElement | null;
     while (block?.classList.contains("source-anchor")) {
       block = block.nextElementSibling as HTMLElement | null;
     }
     if (!block) continue;
-
-    const sourceStart = Number(anchor.dataset.sourceStart ?? 0);
-    const sourceEnd = Number(anchor.dataset.sourceEnd ?? sourceStart);
-    const sourceBlock = sourceText.slice(sourceStart, sourceEnd);
-    const sourceFormulas = findSourceMarkdownMath(sourceBlock).filter(
-      (formula) =>
-        isLostMathDelimiterEnabled(formula.open, settings),
-    );
-    if (sourceFormulas.length === 0) continue;
-
-    const renderedFormulas = renderedByAnchor.get(anchor) ?? [];
-    const matchedSourceIndexes = new Set(
-      matchFormulaInputs(renderedFormulas, sourceFormulas).filter(
-        (index): index is number => index !== undefined,
-      ),
-    );
-    if (matchedSourceIndexes.size === sourceFormulas.length) continue;
 
     const visible = collectVisibleText(block);
     const pending: Array<{
@@ -754,8 +871,11 @@ function annotateLostSourceMath(
     }> = [];
     let visibleCursor = 0;
 
-    sourceFormulas.forEach((formula, formulaIndex) => {
-      const originalSource = sourceBlock.slice(formula.start, formula.end);
+    lostFormulas.forEach((formula) => {
+      const originalSource = sourceText.slice(
+        formula.sourceStart,
+        formula.sourceEnd,
+      );
       const projection = getMarkdownFormulaProjection(originalSource);
       const projectedStart = projection.visibleText
         ? visible.value.indexOf(projection.visibleText, visibleCursor)
@@ -763,8 +883,6 @@ function annotateLostSourceMath(
       if (projectedStart !== -1) {
         visibleCursor = projectedStart + projection.visibleText.length;
       }
-      if (matchedSourceIndexes.has(formulaIndex)) return;
-
       const id = `markdown-lost-math-${lostIndex}`;
       lostIndex += 1;
       const candidate: MarkdownLostMathCandidate = {
@@ -907,7 +1025,7 @@ function annotatePostMarkdownMath(
         }]
       : [];
   });
-  const originalByElement = mapOriginalMathByElement(
+  const formulaAnalysis = analyzeRenderedMathByElement(
     container,
     sourceText,
     renderedReferences,
@@ -917,25 +1035,9 @@ function annotatePostMarkdownMath(
       `[data-markdown-math-id="${candidate.id}"]`,
     );
     candidate.originalMath = marker
-      ? originalByElement.get(marker)
+      ? formulaAnalysis.originalByElement.get(marker)
       : undefined;
   }
-
-  const lostMathRenderedReferences = renderedReferences.filter(
-    (formula) => {
-      const candidate = candidates.find(
-        (entry) => entry.id === formula.element.getAttribute(
-          "data-markdown-math-id",
-        ),
-      );
-      return candidate
-        ? isLostMathDelimiterEnabled(
-            candidate.open,
-            lostMathSettings,
-          )
-        : false;
-    },
-  );
 
   return {
     recognized: new Map(
@@ -944,7 +1046,7 @@ function annotatePostMarkdownMath(
     lost: annotateLostSourceMath(
       container,
       sourceText,
-      lostMathRenderedReferences,
+      formulaAnalysis.analyses,
       lostMathSettings,
       lostInputLabel,
       underscoreSuggestion,
@@ -983,7 +1085,7 @@ function annotateMathJaxErrors(
       math: item.math as string,
     }),
   );
-  const originalByElement = mapOriginalMathByElement(
+  const formulaAnalysis = analyzeRenderedMathByElement(
     container,
     sourceText,
     renderedReferences,
@@ -993,7 +1095,7 @@ function annotateMathJaxErrors(
     if (item.typesetRoot && typeof item.math === "string") {
       formulaByTypesetRoot.set(item.typesetRoot, {
         math: item.math,
-        originalMath: originalByElement.get(item.typesetRoot),
+        originalMath: formulaAnalysis.originalByElement.get(item.typesetRoot),
       });
     }
   }
@@ -1210,6 +1312,7 @@ export default function Editor() {
     useState<ReminderSettings>(() =>
       parseReminderSettings(DEFAULT_REMINDER_SETTINGS),
     );
+  const [formulaAnalyses, setFormulaAnalyses] = useState<FormulaAnalysis[]>([]);
   const ui = UI_TEXT[language];
 
   const sourceEditorRef = useRef<SourceEditorHandle>(null);
@@ -1270,16 +1373,14 @@ export default function Editor() {
     [sanitizedHtml],
   );
   const sourceFingerprint = useMemo(() => getTextFingerprint(text), [text]);
-  const reminderFingerprint = [
+  const reminderFingerprint = `${reminderSettings.diagnosticLevel}:${[
     reminderSettings.mathJaxErrors,
     reminderSettings.lostMath.enabled,
     reminderSettings.lostMath.inlineDollar,
     reminderSettings.lostMath.displayDollar,
     reminderSettings.lostMath.inlineParen,
     reminderSettings.lostMath.displayBracket,
-  ]
-    .map(Number)
-    .join("");
+  ].map(Number).join("")}`;
   const markdownWarnings = useMemo(
     () =>
       reminderSettings.markdownWarnings
@@ -1287,18 +1388,88 @@ export default function Editor() {
         : [],
     [reminderSettings.markdownWarnings, text],
   );
+  const displayedWarnings = useMemo<DisplayedWarning[]>(() => {
+    const warnings: DisplayedWarning[] = markdownWarnings.flatMap((warning) => {
+      const severity = MARKDOWN_ERROR_CODES.has(warning.code)
+        ? "error"
+        : "warning";
+      return reminderSettings.diagnosticLevel === "errors" &&
+        severity !== "error"
+        ? []
+        : [{ ...warning, severity }];
+    });
+    for (const analysis of formulaAnalyses) {
+      if (!shouldShowFormulaDiagnostic(
+        analysis,
+        reminderSettings.diagnosticLevel,
+      )) {
+        continue;
+      }
+      if (analysis.status === "lost") {
+        if (!isLostMathDelimiterEnabled(
+          analysis.open,
+          reminderSettings.lostMath,
+        )) {
+          continue;
+        }
+      } else if (!reminderSettings.markdownWarnings) {
+        continue;
+      }
+      if (
+        analysis.cause === "markdown-emphasis-interruption" &&
+        markdownWarnings.some(
+          (warning) =>
+            warning.code === "markdown-emphasis-in-math" &&
+            warning.start >= analysis.sourceStart &&
+            warning.end <= analysis.sourceEnd,
+        )
+      ) {
+        continue;
+      }
+      warnings.push({
+        code: `formula-${analysis.cause}`,
+        start: analysis.sourceStart,
+        end: analysis.sourceEnd,
+        message: getFormulaDiagnosticMessage(analysis, language),
+        severity:
+          analysis.severity === "error"
+            ? "error"
+            : analysis.severity === "warning"
+              ? "warning"
+              : "info",
+      });
+    }
+    return warnings
+      .sort((left, right) => left.start - right.start)
+      .slice(0, 100);
+  }, [
+    formulaAnalyses,
+    language,
+    markdownWarnings,
+    reminderSettings.diagnosticLevel,
+    reminderSettings.lostMath,
+    reminderSettings.markdownWarnings,
+  ]);
   const sourceDiagnostics = useMemo<SourceDiagnostic[]>(
     () =>
-      markdownWarnings.map((warning) => ({
+      displayedWarnings.map((warning) => ({
         from: warning.start,
         to: warning.end,
+        severity: warning.severity,
         message:
           language === "en"
             ? ENGLISH_WARNING_MESSAGES[warning.code] ?? warning.message
             : warning.message,
       })),
-    [language, markdownWarnings],
+    [displayedWarnings, language],
   );
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setFormulaAnalyses(analyzeMarkdownHtmlFormulas(sanitizedHtml, text));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sanitizedHtml, text]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -2613,6 +2784,13 @@ export default function Editor() {
     }));
   };
 
+  const updateDiagnosticLevel = (diagnosticLevel: DiagnosticLevel) => {
+    setReminderSettings((current) => ({
+      ...current,
+      diagnosticLevel,
+    }));
+  };
+
   const updateLostMathToggle = (
     key: keyof LostMathReminderSettings,
     checked: boolean,
@@ -2849,16 +3027,16 @@ export default function Editor() {
             <header className="paneHeader">
               <strong>{ui.edit}</strong>
               <div className="paneHeaderActions">
-                {markdownWarnings.length ? (
+                {displayedWarnings.length ? (
                   <details className="warningMenu">
                     <summary
-                      aria-label={ui.warningCount(markdownWarnings.length)}
+                      aria-label={ui.warningCount(displayedWarnings.length)}
                       title={ui.markdownWarning}
                     >
-                      ⚠ {markdownWarnings.length}
+                      ⚠ {displayedWarnings.length}
                     </summary>
                     <div className="warningPanel">
-                      {markdownWarnings.map((warning) => {
+                      {displayedWarnings.map((warning) => {
                         const location = getSourceLocation(text, warning.start);
                         return (
                           <button
@@ -3188,6 +3366,49 @@ export default function Editor() {
             </p>
 
             <div className="settingsList">
+              <fieldset className="diagnosticLevelSettings">
+                <legend>
+                  <strong>{ui.diagnosticLevelSetting}</strong>
+                  <small>{ui.diagnosticLevelDescription}</small>
+                </legend>
+                <div>
+                  {[
+                    [
+                      "errors",
+                      ui.errorsLevel,
+                      ui.errorsLevelDescription,
+                    ],
+                    [
+                      "recommended",
+                      ui.recommendedLevel,
+                      ui.recommendedLevelDescription,
+                    ],
+                    ["all", ui.allLevel, ui.allLevelDescription],
+                  ].map(([level, label, description]) => (
+                    <label
+                      className="diagnosticLevelSetting"
+                      key={level}
+                    >
+                      <input
+                        type="radio"
+                        name="diagnostic-level"
+                        value={level}
+                        checked={
+                          reminderSettings.diagnosticLevel === level
+                        }
+                        onChange={() =>
+                          updateDiagnosticLevel(level as DiagnosticLevel)
+                        }
+                      />
+                      <span>
+                        <strong>{label}</strong>
+                        <small>{description}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
               <label className="settingsToggle">
                 <input
                   type="checkbox"

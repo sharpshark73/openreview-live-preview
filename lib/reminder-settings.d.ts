@@ -7,6 +7,7 @@ export type LostMathReminderSettings = {
 };
 
 export type ReminderSettings = {
+  diagnosticLevel: "errors" | "recommended" | "all";
   markdownWarnings: boolean;
   mathJaxErrors: boolean;
   lostMath: LostMathReminderSettings;

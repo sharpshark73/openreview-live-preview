@@ -225,6 +225,72 @@ a:focus {
   gap: 10px;
 }
 
+.diagnosticLevelSettings {
+  margin: 0;
+  padding: 11px 12px 12px;
+  background: #fff;
+  border: 1px solid #d9d6d0;
+}
+
+.diagnosticLevelSettings legend {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 0 0 9px;
+}
+
+.diagnosticLevelSettings legend strong {
+  color: #30383e;
+  font-size: 0.82rem;
+}
+
+.diagnosticLevelSettings legend small,
+.diagnosticLevelSetting small {
+  color: #687177;
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.diagnosticLevelSettings > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.diagnosticLevelSetting {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  padding: 8px;
+  background: #faf9f6;
+  border: 1px solid #e1ded8;
+  cursor: pointer;
+}
+
+.diagnosticLevelSetting:has(input:checked) {
+  background: #eef5f7;
+  border-color: #7896a1;
+}
+
+.diagnosticLevelSetting input {
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: var(--or-blue-dark);
+}
+
+.diagnosticLevelSetting span {
+  display: grid;
+  gap: 2px;
+}
+
+.diagnosticLevelSetting strong {
+  color: #30383e;
+  font-size: 0.74rem;
+}
+
 .settingsToggle {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1675,6 +1741,10 @@ a:focus {
   }
 
   .delimiterSettings {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnosticLevelSettings > div {
     grid-template-columns: 1fr;
   }
 
